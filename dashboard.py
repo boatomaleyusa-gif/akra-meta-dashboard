@@ -934,7 +934,7 @@ def _thai_performance_agency_summary(filtered_df, campaign_df, adset_df, creativ
             "ต้องแก้จุดคัดกรอง Lead Form, Landing Page และกระบวนการ Follow-up ไม่ใช่เพิ่มงบอย่างเดียว."
         )
 
-    st.markdown("### สรุปผู้บริหารแบบ Performance Agency")
+    st.markdown("### สรุป Performance")
     for bullet in bullets:
         st.markdown(f"- {bullet}")
 
