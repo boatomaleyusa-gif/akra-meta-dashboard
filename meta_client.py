@@ -1,4 +1,6 @@
 import json
+import hashlib
+import os
 from pathlib import Path
 from datetime import datetime
 
@@ -49,30 +51,30 @@ INBOX_ACTION_TYPES = {
 
 
 def load_meta_ads_data(project_root, date_from=None, date_to=None, date_preset=None):
-    """Fetch read-only ad-level insights when .env credentials are available."""
-    env_path = Path(project_root) / ".env"
-    if not env_path.exists():
-        return None
-
-    print("ENV LOADED", flush=True)
-
+    """Fetch read-only ad-level insights when Meta credentials are available."""
     try:
         import requests
-        from dotenv import dotenv_values
     except ImportError as error:
         raise RuntimeError(
             "Missing dependency. Run: pip install -r requirements.txt"
         ) from error
 
-    env_config = dotenv_values(env_path)
-    access_token = env_config.get("META_ACCESS_TOKEN")
-    ad_account_ids = env_config.get("META_AD_ACCOUNT_IDS") or env_config.get("META_AD_ACCOUNT_ID")
-    if not access_token:
-        raise RuntimeError("META_ACCESS_TOKEN is missing in .env")
-    if not ad_account_ids:
-        raise RuntimeError("META_AD_ACCOUNT_IDS or META_AD_ACCOUNT_ID is missing in .env")
+    credential_config = _meta_credential_config(project_root)
+    if not credential_config:
+        return None
 
-    date_config = _date_config(date_from, date_to, date_preset, env_config)
+    access_token = credential_config.get("META_ACCESS_TOKEN")
+    ad_account_ids = credential_config.get("META_AD_ACCOUNT_IDS") or credential_config.get(
+        "META_AD_ACCOUNT_ID"
+    )
+    if not access_token:
+        raise RuntimeError("Meta credentials are incomplete: META_ACCESS_TOKEN is missing.")
+    if not ad_account_ids:
+        raise RuntimeError(
+            "Meta credentials are incomplete: META_AD_ACCOUNT_ID or META_AD_ACCOUNT_IDS is missing."
+        )
+
+    date_config = _date_config(date_from, date_to, date_preset, credential_config)
     normalized_ad_account_ids = _split_ad_account_ids(ad_account_ids)
     print(f"META_AD_ACCOUNT_COUNT={len(normalized_ad_account_ids)}", flush=True)
     rows = []
@@ -91,6 +93,96 @@ def load_meta_ads_data(project_root, date_from=None, date_to=None, date_preset=N
         df = pd.DataFrame([_normalize_insight(row, creative_data) for row in rows])
     df.attrs["date_range_label"] = date_config["label"]
     return df
+
+
+def meta_credentials_cache_key(project_root):
+    credential_config = _meta_credential_config(project_root)
+    account_ids = ""
+    source = ""
+    if credential_config:
+        account_ids = credential_config.get("META_AD_ACCOUNT_IDS") or credential_config.get(
+            "META_AD_ACCOUNT_ID", ""
+        )
+        source = credential_config.get("_META_CREDENTIAL_SOURCE", "")
+    env_path = Path(project_root) / ".env"
+    env_mtime = env_path.stat().st_mtime if env_path.exists() else 0
+    return hashlib.sha256(f"{source}|{account_ids}|{env_mtime}".encode("utf-8")).hexdigest()
+
+
+def _meta_credential_config(project_root):
+    return (
+        _streamlit_secrets_config()
+        or _environment_config()
+        or _dotenv_config(Path(project_root) / ".env")
+    )
+
+
+def _streamlit_secrets_config():
+    try:
+        import streamlit as st
+    except ImportError:
+        return {}
+
+    try:
+        secrets = st.secrets
+        config = _config_from_mapping(secrets)
+        meta_section = secrets.get("meta", {}) if hasattr(secrets, "get") else {}
+        section_config = _config_from_mapping(meta_section)
+    except Exception:
+        return {}
+
+    merged_config = {**section_config, **config}
+    return _with_source(merged_config, "streamlit_secrets")
+
+
+def _environment_config():
+    config = {
+        "META_ACCESS_TOKEN": os.environ.get("META_ACCESS_TOKEN", ""),
+        "META_AD_ACCOUNT_IDS": os.environ.get("META_AD_ACCOUNT_IDS", ""),
+        "META_AD_ACCOUNT_ID": os.environ.get("META_AD_ACCOUNT_ID", ""),
+        "META_DATE_FROM": os.environ.get("META_DATE_FROM", ""),
+        "META_DATE_TO": os.environ.get("META_DATE_TO", ""),
+        "META_DATE_PRESET": os.environ.get("META_DATE_PRESET", ""),
+    }
+    return _with_source(config, "environment")
+
+
+def _dotenv_config(env_path):
+    if not env_path.exists():
+        return {}
+
+    try:
+        from dotenv import dotenv_values
+    except ImportError as error:
+        raise RuntimeError(
+            "Missing dependency. Run: pip install -r requirements.txt"
+        ) from error
+
+    return _with_source(dotenv_values(env_path), "dotenv")
+
+
+def _config_from_mapping(mapping):
+    keys = {
+        "META_ACCESS_TOKEN",
+        "META_AD_ACCOUNT_IDS",
+        "META_AD_ACCOUNT_ID",
+        "META_DATE_FROM",
+        "META_DATE_TO",
+        "META_DATE_PRESET",
+    }
+    return {key: str(mapping.get(key, "") or "") for key in keys if hasattr(mapping, "get")}
+
+
+def _with_source(config, source):
+    if not config:
+        return {}
+    if not (
+        config.get("META_ACCESS_TOKEN")
+        or config.get("META_AD_ACCOUNT_IDS")
+        or config.get("META_AD_ACCOUNT_ID")
+    ):
+        return {}
+    return {**config, "_META_CREDENTIAL_SOURCE": source}
 
 
 def require_write_approval(action_name, approved=False):

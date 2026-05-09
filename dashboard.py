@@ -1,5 +1,4 @@
 ﻿from datetime import date, timedelta
-import hashlib
 from html import escape
 from pathlib import Path
 import sys
@@ -22,7 +21,7 @@ from charts import (
     top_creatives_by_inbox_messages,
     top_creatives_by_leads,
 )
-from meta_client import load_meta_ads_data
+from meta_client import load_meta_ads_data, meta_credentials_cache_key
 from metrics import (
     add_metrics,
     apply_primary_result_metrics,
@@ -134,24 +133,8 @@ def _sync_selection_state(key, options, default_options=None):
     ]
 
 
-def _env_value_from_file(env_path, names):
-    if not env_path.exists():
-        return ""
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        clean_line = line.strip()
-        if not clean_line or clean_line.startswith("#") or "=" not in clean_line:
-            continue
-        key, value = clean_line.split("=", 1)
-        if key.strip() in names:
-            return value.strip().strip('"').strip("'")
-    return ""
-
-
 def _meta_account_cache_key():
-    env_path = PROJECT_ROOT / ".env"
-    account_ids = _env_value_from_file(env_path, {"META_AD_ACCOUNT_IDS", "META_AD_ACCOUNT_ID"})
-    env_mtime = env_path.stat().st_mtime if env_path.exists() else 0
-    return hashlib.sha256(f"{account_ids}|{env_mtime}".encode("utf-8")).hexdigest()
+    return meta_credentials_cache_key(PROJECT_ROOT)
 
 
 @st.cache_data(show_spinner=False)
@@ -490,7 +473,9 @@ def _load_dashboard_data(use_custom_range, date_from, date_to, preset):
                     f"Live Meta Ads data unavailable and sample fallback is missing: {live_error}"
                 ) from live_error
             raise RuntimeError(
-                "Meta credentials were not found. Add .env in the app directory or provide "
+                "Meta credentials were not found. Add META_ACCESS_TOKEN and "
+                "META_AD_ACCOUNT_ID or META_AD_ACCOUNT_IDS to Streamlit secrets, "
+                "environment variables, or local .env. You can also provide "
                 "data/sample_ads.csv for local fallback."
             )
 
