@@ -11,6 +11,7 @@ import streamlit as st
 APP_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_DIR
 DATA_PATH = PROJECT_ROOT / "data" / "sample_ads.csv"
+FILE_CACHE_PATH = PROJECT_ROOT / "data" / "cache" / "latest_ads.parquet"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
@@ -488,6 +489,18 @@ def _load_dashboard_data(use_custom_range, date_from, date_to, preset, raise_rat
     if meta_df is None:
         if live_error and RATE_LIMIT_MESSAGE in str(live_error) and raise_rate_limit:
             raise RuntimeError(RATE_LIMIT_MESSAGE) from live_error
+        file_cache_df = _load_file_cache()
+        if file_cache_df is not None:
+            if live_error:
+                if RATE_LIMIT_MESSAGE in str(live_error):
+                    file_cache_df.attrs["data_source_warning"] = (
+                        f"{RATE_LIMIT_MESSAGE} Showing cached file data."
+                    )
+                else:
+                    file_cache_df.attrs["data_source_warning"] = (
+                        f"Live Meta Ads data unavailable: {live_error}. Showing cached file data."
+                    )
+            return file_cache_df
         if DATA_PATH.exists():
             meta_df = pd.read_csv(DATA_PATH, parse_dates=["date"])
             meta_df.attrs["date_range_label"] = "Report Date Range: Sample CSV"
@@ -543,9 +556,58 @@ def _cache_status_from_created_at(cache_created_at):
     return "Live Meta fetch"
 
 
+def _save_file_cache(ads_df):
+    try:
+        FILE_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        ads_df.to_parquet(FILE_CACHE_PATH, index=False)
+    except Exception as error:
+        print(f"File cache save failed: {error.__class__.__name__}", flush=True)
+
+
+def _load_file_cache():
+    if not FILE_CACHE_PATH.exists():
+        return None
+    try:
+        cached_df = pd.read_parquet(FILE_CACHE_PATH)
+    except Exception as error:
+        print(f"File cache load failed: {error.__class__.__name__}", flush=True)
+        return None
+    cached_df.attrs["date_range_label"] = "Report Date Range: Cached File"
+    cached_df.attrs["cache_status"] = "CACHED FILE DATA"
+    return cached_df
+
+
+def _restore_file_cache_to_session():
+    cached_df = _load_file_cache()
+    if cached_df is None:
+        return False
+    st.session_state[STATE_ADS_DF] = cached_df
+    st.session_state[STATE_DATE_RANGE_LABEL] = cached_df.attrs.get("date_range_label", "")
+    st.session_state[STATE_FETCH_REQUEST_KEY] = ""
+    st.session_state[STATE_CACHE_STATUS] = "CACHED FILE DATA"
+    st.session_state[STATE_DATA_SOURCE_WARNING] = cached_df.attrs.get("data_source_warning", "")
+    return True
+
+
+def _should_save_file_cache(ads_df):
+    cache_status = ads_df.attrs.get("cache_status", "")
+    date_range_label = ads_df.attrs.get("date_range_label", "")
+    if cache_status == "CACHED FILE DATA":
+        return False
+    if date_range_label == "Report Date Range: Sample CSV":
+        return False
+    return True
+
+
 def _render_cache_status(status_slot, ttl_slot):
     status = st.session_state.get(STATE_CACHE_STATUS, "No cached report")
-    status_slot.caption(f"Cache status: {status}")
+    if status == "CACHED FILE DATA":
+        data_source = "CACHED FILE DATA"
+    elif STATE_ADS_DF in st.session_state:
+        data_source = "LIVE DATA"
+    else:
+        data_source = "No report loaded"
+    status_slot.caption(f"Data source: {data_source}")
     ttl_slot.caption(f"Meta cache TTL: {META_CACHE_TTL_SECONDS // 60} minutes")
 
 
@@ -1909,12 +1971,18 @@ def main():
         cache_ttl_slot = st.empty()
         _render_cache_status(cache_status_slot, cache_ttl_slot)
 
+    restored_file_cache = False
+    if not generate and STATE_ADS_DF not in st.session_state:
+        restored_file_cache = _restore_file_cache_to_session()
+
     initial_label = (
         f"{date_from.strftime('%B')} {date_from.day}, {date_from.year} - "
         f"{date_to.strftime('%B')} {date_to.day}, {date_to.year}"
         if use_custom_range
         else preset
     )
+    if restored_file_cache:
+        initial_label = st.session_state.get(STATE_DATE_RANGE_LABEL, initial_label)
     _header(initial_label)
 
     if not generate:
@@ -1935,6 +2003,8 @@ def main():
             ):
                 ads_df = st.session_state[STATE_ADS_DF]
                 st.session_state[STATE_CACHE_STATUS] = "Session cache hit"
+                if _should_save_file_cache(ads_df):
+                    _save_file_cache(ads_df)
             else:
                 with st.spinner("Fetching Meta Ads insights..."):
                     ads_df = _load_dashboard_data(
@@ -1955,13 +2025,18 @@ def main():
                 st.session_state[STATE_DATA_SOURCE_WARNING] = ads_df.attrs.get(
                     "data_source_warning", ""
                 )
+                if _should_save_file_cache(ads_df):
+                    _save_file_cache(ads_df)
                 if ads_df.attrs.get("data_source_warning"):
                     st.warning(ads_df.attrs["data_source_warning"])
         except Exception as error:
             if RATE_LIMIT_MESSAGE in str(error):
                 if STATE_ADS_DF in st.session_state:
                     ads_df = st.session_state[STATE_ADS_DF]
-                    st.session_state[STATE_CACHE_STATUS] = "Serving cached data after rate limit"
+                    if st.session_state.get(STATE_CACHE_STATUS) != "CACHED FILE DATA":
+                        st.session_state[STATE_CACHE_STATUS] = (
+                            "Serving cached data after rate limit"
+                        )
                     st.warning(f"{RATE_LIMIT_MESSAGE} Showing cached data.")
                 else:
                     st.error(RATE_LIMIT_MESSAGE)
