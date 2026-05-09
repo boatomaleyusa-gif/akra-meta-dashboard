@@ -1,6 +1,7 @@
 import json
 import hashlib
 import os
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -9,7 +10,11 @@ import pandas as pd
 
 API_VERSION = "v21.0"
 BASE_URL = f"https://graph.facebook.com/{API_VERSION}"
-CREATIVE_FETCH_LIMIT = 1020
+CREATIVE_FETCH_LIMIT = 100
+CREATIVE_BATCH_SIZE = 50
+IMAGE_HASH_FETCH_LIMIT = 50
+MAX_SAFE_RETRIES = 1
+RATE_LIMIT_MESSAGE = "Meta API rate limit reached. Please wait and try again."
 READ_ONLY_META_OPERATIONS = {
     "fetch_insights",
     "fetch_creatives",
@@ -79,19 +84,24 @@ def load_meta_ads_data(project_root, date_from=None, date_to=None, date_preset=N
     print(f"META_AD_ACCOUNT_COUNT={len(normalized_ad_account_ids)}", flush=True)
     rows = []
     creative_data = {}
+    optional_rate_limited = False
     for ad_account_id in normalized_ad_account_ids:
         print("FETCHING META AD ACCOUNT", flush=True)
         account_rows = _fetch_ad_insights(requests, access_token, ad_account_id, date_config)
         rows.extend(account_rows)
-        creative_data.update(
-            _fetch_ad_creatives(requests, access_token, ad_account_id, account_rows)
+        account_creative_data, account_rate_limited = _fetch_ad_creatives(
+            requests, access_token, ad_account_id, account_rows
         )
+        creative_data.update(account_creative_data)
+        optional_rate_limited = optional_rate_limited or account_rate_limited
     _write_action_type_debug(rows, Path(project_root) / "reports" / "meta_action_types_debug.csv")
     if not rows:
         df = pd.DataFrame(columns=_normalized_columns())
     else:
         df = pd.DataFrame([_normalize_insight(row, creative_data) for row in rows])
     df.attrs["date_range_label"] = date_config["label"]
+    if optional_rate_limited:
+        df.attrs["data_source_warning"] = RATE_LIMIT_MESSAGE
     return df
 
 
@@ -251,13 +261,16 @@ def _fetch_ad_insights(requests, access_token, ad_account_id, date_config):
     rows = []
     while url:
         try:
-            response = requests.get(url, params=params, timeout=120)
+            response = _get_with_backoff(requests, url, params=params, timeout=120)
         except requests.RequestException as error:
             print("META API ERROR", flush=True)
             print(f"Connection failed: {error.__class__.__name__}", flush=True)
             raise RuntimeError("Meta API connection failed before a response was received") from error
 
         print(f"Response status code: {response.status_code}", flush=True)
+        if _is_app_rate_limit_response(response):
+            print("META API RATE LIMITED", flush=True)
+            raise RuntimeError(RATE_LIMIT_MESSAGE)
         try:
             response.raise_for_status()
         except requests.HTTPError as error:
@@ -289,11 +302,62 @@ def _safe_meta_error_message(response):
     return message
 
 
+def _get_with_backoff(requests, url, params=None, timeout=30):
+    retry_count = 0
+    while True:
+        response = requests.get(url, params=params, timeout=timeout)
+        if not _should_retry_response(response) or retry_count >= MAX_SAFE_RETRIES:
+            return response
+        retry_count += 1
+        retry_after = _retry_after_seconds(response)
+        print(
+            f"Meta API transient response {response.status_code}; retrying once after {retry_after}s",
+            flush=True,
+        )
+        time.sleep(retry_after)
+
+
+def _should_retry_response(response):
+    if _is_app_rate_limit_response(response):
+        return False
+    return response.status_code in {429, 500, 502, 503, 504}
+
+
+def _retry_after_seconds(response):
+    retry_after = response.headers.get("Retry-After", "")
+    try:
+        return min(max(int(retry_after), 1), 5)
+    except (TypeError, ValueError):
+        return 2
+
+
+def _is_app_rate_limit_response(response):
+    if response.status_code not in {403, 429}:
+        return False
+    error_payload = _meta_error_payload(response)
+    return (
+        error_payload.get("code") == 4
+        and error_payload.get("error_subcode") == 1504022
+    )
+
+
+def _meta_error_payload(response):
+    try:
+        payload = response.json()
+    except ValueError:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    error_payload = payload.get("error", {})
+    return error_payload if isinstance(error_payload, dict) else {}
+
+
 def _fetch_ad_creatives(requests, access_token, ad_account_id, rows):
     ad_ids = _top_ad_ids_by_spend(rows, CREATIVE_FETCH_LIMIT)
     creative_data = {}
+    rate_limited = False
     if not ad_ids:
-        return creative_data
+        return creative_data, rate_limited
 
     print(
         f"FETCHING CREATIVE PREVIEWS: {len(ad_ids)} ads by top spend "
@@ -306,7 +370,7 @@ def _fetch_ad_creatives(requests, access_token, ad_account_id, rows):
         "}"
     )
     image_hashes = set()
-    for ad_id_batch in _chunks(ad_ids, 50):
+    for ad_id_batch in _chunks(ad_ids, CREATIVE_BATCH_SIZE):
         url = f"{BASE_URL}/"
         params = {
             "access_token": access_token,
@@ -314,7 +378,7 @@ def _fetch_ad_creatives(requests, access_token, ad_account_id, rows):
             "fields": fields,
         }
         try:
-            response = requests.get(url, params=params, timeout=30)
+            response = _get_with_backoff(requests, url, params=params, timeout=30)
         except requests.RequestException as error:
             print(
                 f"Creative preview batch fetch failed: {error.__class__.__name__}",
@@ -323,6 +387,13 @@ def _fetch_ad_creatives(requests, access_token, ad_account_id, rows):
             for ad_id in ad_id_batch:
                 creative_data[ad_id] = {}
             continue
+
+        if _is_app_rate_limit_response(response):
+            print("Creative preview fetch stopped: Meta API rate limit reached", flush=True)
+            for ad_id in ad_id_batch:
+                creative_data[ad_id] = {}
+            rate_limited = True
+            break
 
         if response.status_code != 200:
             print(
@@ -351,14 +422,17 @@ def _fetch_ad_creatives(requests, access_token, ad_account_id, rows):
                 "creative_preview_url": _creative_preview_url(effective_story_id),
             }
 
-    image_urls = _fetch_ad_images(requests, access_token, ad_account_id, image_hashes)
+    image_urls, image_rate_limited = _fetch_ad_images(
+        requests, access_token, ad_account_id, image_hashes
+    )
+    rate_limited = rate_limited or image_rate_limited
     for creative in creative_data.values():
         if creative.get("thumbnail_url") or creative.get("image_url"):
             continue
         image_hash = creative.get("object_story_image_hash")
         if image_hash:
             creative["image_url"] = image_urls.get(image_hash, "")
-    return creative_data
+    return creative_data, rate_limited
 
 
 def _top_ad_ids_by_spend(rows, limit):
@@ -383,11 +457,13 @@ def _object_story_image_hash(object_story_spec):
 
 def _fetch_ad_images(requests, access_token, ad_account_id, image_hashes):
     image_urls = {}
+    rate_limited = False
     if not image_hashes:
-        return image_urls
+        return image_urls, rate_limited
 
-    print(f"FETCHING CREATIVE IMAGE HASHES: {len(image_hashes)} images", flush=True)
-    for image_hash_batch in _chunks(sorted(image_hashes), 50):
+    selected_hashes = sorted(image_hashes)[:IMAGE_HASH_FETCH_LIMIT]
+    print(f"FETCHING CREATIVE IMAGE HASHES: {len(selected_hashes)} images", flush=True)
+    for image_hash_batch in _chunks(selected_hashes, CREATIVE_BATCH_SIZE):
         url = f"{BASE_URL}/{ad_account_id}/adimages"
         params = {
             "access_token": access_token,
@@ -395,13 +471,18 @@ def _fetch_ad_images(requests, access_token, ad_account_id, image_hashes):
             "fields": "hash,url,url_128",
         }
         try:
-            response = requests.get(url, params=params, timeout=30)
+            response = _get_with_backoff(requests, url, params=params, timeout=30)
         except requests.RequestException as error:
             print(
                 f"Creative image hash fetch failed: {error.__class__.__name__}",
                 flush=True,
             )
             continue
+
+        if _is_app_rate_limit_response(response):
+            print("Creative image hash fetch stopped: Meta API rate limit reached", flush=True)
+            rate_limited = True
+            break
 
         if response.status_code != 200:
             print(
@@ -414,7 +495,7 @@ def _fetch_ad_images(requests, access_token, ad_account_id, image_hashes):
             image_hash = image.get("hash")
             if image_hash:
                 image_urls[image_hash] = image.get("url") or image.get("url_128", "")
-    return image_urls
+    return image_urls, rate_limited
 
 
 def _chunks(values, size):

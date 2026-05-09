@@ -21,7 +21,7 @@ from charts import (
     top_creatives_by_inbox_messages,
     top_creatives_by_leads,
 )
-from meta_client import load_meta_ads_data, meta_credentials_cache_key
+from meta_client import RATE_LIMIT_MESSAGE, load_meta_ads_data, meta_credentials_cache_key
 from metrics import (
     add_metrics,
     apply_primary_result_metrics,
@@ -88,6 +88,8 @@ STATE_USE_CUSTOM_RANGE = "use_custom_range"
 STATE_DATE_FROM = "date_from"
 STATE_DATE_TO = "date_to"
 STATE_PRESET = "preset"
+STATE_FETCH_REQUEST_KEY = "fetch_request_key"
+META_CACHE_TTL_SECONDS = 60 * 60
 
 
 def _format_currency(value):
@@ -137,7 +139,19 @@ def _meta_account_cache_key():
     return meta_credentials_cache_key(PROJECT_ROOT)
 
 
-@st.cache_data(show_spinner=False)
+def _fetch_request_key(use_custom_range, date_from, date_to, preset):
+    return "|".join(
+        [
+            str(use_custom_range),
+            date_from.isoformat(),
+            date_to.isoformat(),
+            str(preset),
+            _meta_account_cache_key(),
+        ]
+    )
+
+
+@st.cache_data(show_spinner=False, ttl=META_CACHE_TTL_SECONDS)
 def _cached_meta_ads_data(
     project_root,
     use_custom_range,
@@ -464,11 +478,18 @@ def _load_dashboard_data(use_custom_range, date_from, date_to, preset):
             meta_df = pd.read_csv(DATA_PATH, parse_dates=["date"])
             meta_df.attrs["date_range_label"] = "Report Date Range: Sample CSV"
             if live_error:
-                meta_df.attrs["data_source_warning"] = (
-                    f"Live Meta Ads data unavailable: {live_error}. Showing sample CSV fallback."
-                )
+                if RATE_LIMIT_MESSAGE in str(live_error):
+                    meta_df.attrs["data_source_warning"] = (
+                        f"{RATE_LIMIT_MESSAGE} Showing sample CSV fallback."
+                    )
+                else:
+                    meta_df.attrs["data_source_warning"] = (
+                        f"Live Meta Ads data unavailable: {live_error}. Showing sample CSV fallback."
+                    )
         else:
             if live_error:
+                if RATE_LIMIT_MESSAGE in str(live_error):
+                    raise RuntimeError(RATE_LIMIT_MESSAGE) from live_error
                 raise RuntimeError(
                     f"Live Meta Ads data unavailable and sample fallback is missing: {live_error}"
                 ) from live_error
@@ -480,6 +501,7 @@ def _load_dashboard_data(use_custom_range, date_from, date_to, preset):
             )
 
     date_range_label = meta_df.attrs.get("date_range_label", "")
+    data_source_warning = meta_df.attrs.get("data_source_warning", "")
     meta_df["date"] = pd.to_datetime(meta_df["date"])
     if "adset" not in meta_df.columns:
         meta_df["adset"] = ""
@@ -487,6 +509,8 @@ def _load_dashboard_data(use_custom_range, date_from, date_to, preset):
     meta_df["project"] = meta_df["campaign"].apply(_extract_project)
     meta_df = _apply_primary_result_logic(meta_df)
     meta_df.attrs["date_range_label"] = date_range_label
+    if data_source_warning:
+        meta_df.attrs["data_source_warning"] = data_source_warning
     return meta_df
 
 
@@ -1839,6 +1863,7 @@ def main():
             _cached_meta_ads_data.clear()
             st.session_state.pop(STATE_ADS_DF, None)
             st.session_state.pop(STATE_DATE_RANGE_LABEL, None)
+            st.session_state.pop(STATE_FETCH_REQUEST_KEY, None)
             st.success("Meta data cache cleared. Click Generate Report to fetch again.")
         generate = st.button(
             "Generate Report", type="primary", use_container_width=True, key="generate_report"
@@ -1863,16 +1888,27 @@ def main():
 
     if generate:
         try:
-            with st.spinner("Fetching Meta Ads insights..."):
-                ads_df = _load_dashboard_data(use_custom_range, date_from, date_to, preset)
+            fetch_request_key = _fetch_request_key(use_custom_range, date_from, date_to, preset)
+            if (
+                st.session_state.get(STATE_FETCH_REQUEST_KEY) == fetch_request_key
+                and STATE_ADS_DF in st.session_state
+            ):
+                ads_df = st.session_state[STATE_ADS_DF]
+            else:
+                with st.spinner("Fetching Meta Ads insights..."):
+                    ads_df = _load_dashboard_data(use_custom_range, date_from, date_to, preset)
                 st.session_state[STATE_ADS_DF] = ads_df
                 st.session_state[STATE_DATE_RANGE_LABEL] = ads_df.attrs.get(
                     "date_range_label", initial_label
                 )
+                st.session_state[STATE_FETCH_REQUEST_KEY] = fetch_request_key
                 if ads_df.attrs.get("data_source_warning"):
                     st.warning(ads_df.attrs["data_source_warning"])
         except Exception as error:
-            st.error(f"Data loading error: {error}")
+            if RATE_LIMIT_MESSAGE in str(error):
+                st.error(RATE_LIMIT_MESSAGE)
+            else:
+                st.error(f"Data loading error: {error}")
             return
     else:
         ads_df = st.session_state[STATE_ADS_DF]
