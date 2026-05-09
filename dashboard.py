@@ -877,7 +877,7 @@ def _thai_performance_agency_summary(filtered_df, campaign_df, adset_df, creativ
 
     bullets = [
         (
-            "สรุปผู้บริหารแบบ Performance Agency: งบรวม "
+            "สรุป Performance: งบรวม "
             f"{_format_currency(total_spend)} สร้างผลลัพธ์รวม "
             f"{_format_number(total_results)} ครั้ง ต้นทุนเฉลี่ยต่อผลลัพธ์อยู่ที่ "
             f"{_format_currency(cost_per_result)} ต้องบริหารงบด้วยตัวเลข ไม่ใช่ความรู้สึก."
