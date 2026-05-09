@@ -1,4 +1,5 @@
 ﻿from datetime import date, timedelta
+from datetime import datetime
 from html import escape
 from pathlib import Path
 import sys
@@ -89,7 +90,9 @@ STATE_DATE_FROM = "date_from"
 STATE_DATE_TO = "date_to"
 STATE_PRESET = "preset"
 STATE_FETCH_REQUEST_KEY = "fetch_request_key"
-META_CACHE_TTL_SECONDS = 60 * 60
+STATE_CACHE_STATUS = "cache_status"
+STATE_DATA_SOURCE_WARNING = "data_source_warning"
+META_CACHE_TTL_SECONDS = 30 * 60
 
 
 def _format_currency(value):
@@ -142,32 +145,38 @@ def _meta_account_cache_key():
 def _fetch_request_key(use_custom_range, date_from, date_to, preset):
     return "|".join(
         [
-            str(use_custom_range),
-            date_from.isoformat(),
-            date_to.isoformat(),
-            str(preset),
             _meta_account_cache_key(),
+            _date_range_cache_key(use_custom_range, date_from, date_to, preset),
         ]
     )
 
 
+def _date_range_cache_key(use_custom_range, date_from, date_to, preset):
+    if use_custom_range:
+        return f"custom:{date_from.isoformat()}:{date_to.isoformat()}"
+    return f"preset:{preset}"
+
+
 @st.cache_data(show_spinner=False, ttl=META_CACHE_TTL_SECONDS)
 def _cached_meta_ads_data(
-    project_root,
-    use_custom_range,
-    date_from_text,
-    date_to_text,
-    preset,
     account_cache_key,
-    breakdown_key,
+    date_range_cache_key,
+    _project_root,
+    date_from_text="",
+    date_to_text="",
+    preset="",
 ):
-    if use_custom_range:
-        return load_meta_ads_data(
-            Path(project_root),
+    if date_from_text and date_to_text:
+        meta_df = load_meta_ads_data(
+            Path(_project_root),
             date_from=date_from_text,
             date_to=date_to_text,
         )
-    return load_meta_ads_data(Path(project_root), date_preset=preset)
+    else:
+        meta_df = load_meta_ads_data(Path(_project_root), date_preset=preset)
+    if meta_df is not None:
+        meta_df.attrs["cache_created_at"] = datetime.utcnow().isoformat(timespec="seconds")
+    return meta_df
 
 
 def _styles():
@@ -457,26 +466,32 @@ def _styles():
     )
 
 
-def _load_dashboard_data(use_custom_range, date_from, date_to, preset):
+def _load_dashboard_data(use_custom_range, date_from, date_to, preset, raise_rate_limit=False):
     live_error = None
     try:
         meta_df = _cached_meta_ads_data(
-            str(PROJECT_ROOT),
-            use_custom_range,
-            date_from.isoformat(),
-            date_to.isoformat(),
-            preset,
             _meta_account_cache_key(),
-            "ad",
+            _date_range_cache_key(use_custom_range, date_from, date_to, preset),
+            str(PROJECT_ROOT),
+            date_from.isoformat() if use_custom_range else "",
+            date_to.isoformat() if use_custom_range else "",
+            "" if use_custom_range else preset,
         )
+        if meta_df is not None:
+            meta_df.attrs["cache_status"] = _cache_status_from_created_at(
+                meta_df.attrs.get("cache_created_at", "")
+            )
     except Exception as error:
         live_error = error
         meta_df = None
 
     if meta_df is None:
+        if live_error and RATE_LIMIT_MESSAGE in str(live_error) and raise_rate_limit:
+            raise RuntimeError(RATE_LIMIT_MESSAGE) from live_error
         if DATA_PATH.exists():
             meta_df = pd.read_csv(DATA_PATH, parse_dates=["date"])
             meta_df.attrs["date_range_label"] = "Report Date Range: Sample CSV"
+            meta_df.attrs["cache_status"] = "Sample CSV fallback"
             if live_error:
                 if RATE_LIMIT_MESSAGE in str(live_error):
                     meta_df.attrs["data_source_warning"] = (
@@ -502,6 +517,7 @@ def _load_dashboard_data(use_custom_range, date_from, date_to, preset):
 
     date_range_label = meta_df.attrs.get("date_range_label", "")
     data_source_warning = meta_df.attrs.get("data_source_warning", "")
+    cache_status = meta_df.attrs.get("cache_status", "")
     meta_df["date"] = pd.to_datetime(meta_df["date"])
     if "adset" not in meta_df.columns:
         meta_df["adset"] = ""
@@ -509,9 +525,28 @@ def _load_dashboard_data(use_custom_range, date_from, date_to, preset):
     meta_df["project"] = meta_df["campaign"].apply(_extract_project)
     meta_df = _apply_primary_result_logic(meta_df)
     meta_df.attrs["date_range_label"] = date_range_label
+    if cache_status:
+        meta_df.attrs["cache_status"] = cache_status
     if data_source_warning:
         meta_df.attrs["data_source_warning"] = data_source_warning
     return meta_df
+
+
+def _cache_status_from_created_at(cache_created_at):
+    try:
+        created_at = datetime.fromisoformat(cache_created_at)
+    except (TypeError, ValueError):
+        return "Meta cache active"
+    age_seconds = (datetime.utcnow() - created_at).total_seconds()
+    if age_seconds > 5:
+        return "Streamlit cache hit"
+    return "Live Meta fetch"
+
+
+def _render_cache_status(status_slot, ttl_slot):
+    status = st.session_state.get(STATE_CACHE_STATUS, "No cached report")
+    status_slot.caption(f"Cache status: {status}")
+    ttl_slot.caption(f"Meta cache TTL: {META_CACHE_TTL_SECONDS // 60} minutes")
 
 
 def _extract_project(campaign_name):
@@ -1864,10 +1899,15 @@ def main():
             st.session_state.pop(STATE_ADS_DF, None)
             st.session_state.pop(STATE_DATE_RANGE_LABEL, None)
             st.session_state.pop(STATE_FETCH_REQUEST_KEY, None)
+            st.session_state.pop(STATE_DATA_SOURCE_WARNING, None)
+            st.session_state[STATE_CACHE_STATUS] = "Cache cleared"
             st.success("Meta data cache cleared. Click Generate Report to fetch again.")
         generate = st.button(
             "Generate Report", type="primary", use_container_width=True, key="generate_report"
         )
+        cache_status_slot = st.empty()
+        cache_ttl_slot = st.empty()
+        _render_cache_status(cache_status_slot, cache_ttl_slot)
 
     initial_label = (
         f"{date_from.strftime('%B')} {date_from.day}, {date_from.year} - "
@@ -1894,25 +1934,46 @@ def main():
                 and STATE_ADS_DF in st.session_state
             ):
                 ads_df = st.session_state[STATE_ADS_DF]
+                st.session_state[STATE_CACHE_STATUS] = "Session cache hit"
             else:
                 with st.spinner("Fetching Meta Ads insights..."):
-                    ads_df = _load_dashboard_data(use_custom_range, date_from, date_to, preset)
+                    ads_df = _load_dashboard_data(
+                        use_custom_range,
+                        date_from,
+                        date_to,
+                        preset,
+                        raise_rate_limit=STATE_ADS_DF in st.session_state,
+                    )
                 st.session_state[STATE_ADS_DF] = ads_df
                 st.session_state[STATE_DATE_RANGE_LABEL] = ads_df.attrs.get(
                     "date_range_label", initial_label
                 )
                 st.session_state[STATE_FETCH_REQUEST_KEY] = fetch_request_key
+                st.session_state[STATE_CACHE_STATUS] = ads_df.attrs.get(
+                    "cache_status", "Meta cache active"
+                )
+                st.session_state[STATE_DATA_SOURCE_WARNING] = ads_df.attrs.get(
+                    "data_source_warning", ""
+                )
                 if ads_df.attrs.get("data_source_warning"):
                     st.warning(ads_df.attrs["data_source_warning"])
         except Exception as error:
             if RATE_LIMIT_MESSAGE in str(error):
-                st.error(RATE_LIMIT_MESSAGE)
+                if STATE_ADS_DF in st.session_state:
+                    ads_df = st.session_state[STATE_ADS_DF]
+                    st.session_state[STATE_CACHE_STATUS] = "Serving cached data after rate limit"
+                    st.warning(f"{RATE_LIMIT_MESSAGE} Showing cached data.")
+                else:
+                    st.error(RATE_LIMIT_MESSAGE)
+                    return
             else:
                 st.error(f"Data loading error: {error}")
-            return
+                return
     else:
         ads_df = st.session_state[STATE_ADS_DF]
         ads_df.attrs["date_range_label"] = st.session_state.get(STATE_DATE_RANGE_LABEL, "")
+
+    _render_cache_status(cache_status_slot, cache_ttl_slot)
 
     if ads_df.empty:
         st.warning("Meta returned no rows for this range.")

@@ -10,7 +10,7 @@ import pandas as pd
 
 API_VERSION = "v21.0"
 BASE_URL = f"https://graph.facebook.com/{API_VERSION}"
-CREATIVE_FETCH_LIMIT = 100
+CREATIVE_FETCH_LIMIT = 50
 CREATIVE_BATCH_SIZE = 50
 IMAGE_HASH_FETCH_LIMIT = 50
 MAX_SAFE_RETRIES = 1
@@ -69,37 +69,43 @@ def load_meta_ads_data(project_root, date_from=None, date_to=None, date_preset=N
         return None
 
     access_token = credential_config.get("META_ACCESS_TOKEN")
-    ad_account_ids = credential_config.get("META_AD_ACCOUNT_IDS") or credential_config.get(
-        "META_AD_ACCOUNT_ID"
-    )
     if not access_token:
         raise RuntimeError("Meta credentials are incomplete: META_ACCESS_TOKEN is missing.")
-    if not ad_account_ids:
+    normalized_ad_account_ids = parse_ad_account_ids(credential_config)
+    if not normalized_ad_account_ids:
         raise RuntimeError(
             "Meta credentials are incomplete: META_AD_ACCOUNT_ID or META_AD_ACCOUNT_IDS is missing."
         )
 
     date_config = _date_config(date_from, date_to, date_preset, credential_config)
-    normalized_ad_account_ids = _split_ad_account_ids(ad_account_ids)
     print(f"META_AD_ACCOUNT_COUNT={len(normalized_ad_account_ids)}", flush=True)
+    request_counts = _new_request_counts()
     rows = []
     creative_data = {}
     optional_rate_limited = False
-    for ad_account_id in normalized_ad_account_ids:
-        print("FETCHING META AD ACCOUNT", flush=True)
-        account_rows = _fetch_ad_insights(requests, access_token, ad_account_id, date_config)
-        rows.extend(account_rows)
-        account_creative_data, account_rate_limited = _fetch_ad_creatives(
-            requests, access_token, ad_account_id, account_rows
-        )
-        creative_data.update(account_creative_data)
-        optional_rate_limited = optional_rate_limited or account_rate_limited
+    try:
+        for ad_account_id in normalized_ad_account_ids:
+            print("FETCHING META AD ACCOUNT", flush=True)
+            account_rows = _fetch_ad_insights(
+                requests, access_token, ad_account_id, date_config, request_counts
+            )
+            rows.extend(account_rows)
+            account_creative_data, account_rate_limited = _fetch_ad_creatives(
+                requests, access_token, ad_account_id, account_rows, request_counts
+            )
+            creative_data.update(account_creative_data)
+            optional_rate_limited = optional_rate_limited or account_rate_limited
+    except Exception:
+        _log_request_counts(request_counts, len(normalized_ad_account_ids), len(rows))
+        raise
+    _log_request_counts(request_counts, len(normalized_ad_account_ids), len(rows))
     _write_action_type_debug(rows, Path(project_root) / "reports" / "meta_action_types_debug.csv")
     if not rows:
         df = pd.DataFrame(columns=_normalized_columns())
     else:
         df = pd.DataFrame([_normalize_insight(row, creative_data) for row in rows])
     df.attrs["date_range_label"] = date_config["label"]
+    df.attrs["meta_request_counts"] = dict(request_counts)
     if optional_rate_limited:
         df.attrs["data_source_warning"] = RATE_LIMIT_MESSAGE
     return df
@@ -107,16 +113,14 @@ def load_meta_ads_data(project_root, date_from=None, date_to=None, date_preset=N
 
 def meta_credentials_cache_key(project_root):
     credential_config = _meta_credential_config(project_root)
-    account_ids = ""
+    account_key = ""
     source = ""
     if credential_config:
-        account_ids = credential_config.get("META_AD_ACCOUNT_IDS") or credential_config.get(
-            "META_AD_ACCOUNT_ID", ""
-        )
+        account_key = ",".join(parse_ad_account_ids(credential_config))
         source = credential_config.get("_META_CREDENTIAL_SOURCE", "")
     env_path = Path(project_root) / ".env"
     env_mtime = env_path.stat().st_mtime if env_path.exists() else 0
-    return hashlib.sha256(f"{source}|{account_ids}|{env_mtime}".encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"{source}|{account_key}|{env_mtime}".encode("utf-8")).hexdigest()
 
 
 def _meta_credential_config(project_root):
@@ -180,7 +184,16 @@ def _config_from_mapping(mapping):
         "META_DATE_TO",
         "META_DATE_PRESET",
     }
-    return {key: str(mapping.get(key, "") or "") for key in keys if hasattr(mapping, "get")}
+    config = {}
+    if not hasattr(mapping, "get"):
+        return config
+    for key in keys:
+        value = mapping.get(key, "")
+        if key in {"META_AD_ACCOUNT_IDS", "META_AD_ACCOUNT_ID"}:
+            config[key] = value
+        else:
+            config[key] = str(value or "")
+    return config
 
 
 def _with_source(config, source):
@@ -231,22 +244,61 @@ def _date_config(date_from=None, date_to=None, date_preset=None, env_config=None
     }
 
 
-def _split_ad_account_ids(ad_account_ids):
-    return [
-        _normalize_ad_account_id(ad_account_id)
-        for ad_account_id in ad_account_ids.split(",")
-        if ad_account_id.strip()
-    ]
+def parse_ad_account_ids(config):
+    raw_account_ids = config.get("META_AD_ACCOUNT_IDS") or config.get("META_AD_ACCOUNT_ID")
+    values = _account_id_values(raw_account_ids)
+    parsed_ids = []
+    for value in values:
+        account_id = _clean_account_id(value)
+        if not account_id:
+            continue
+        if not account_id.startswith("act_"):
+            raise RuntimeError(
+                "Meta ad account IDs must start with 'act_'. Check META_AD_ACCOUNT_ID or "
+                "META_AD_ACCOUNT_IDS in Streamlit secrets, environment variables, or .env."
+            )
+        parsed_ids.append(account_id)
+    return parsed_ids
 
 
-def _normalize_ad_account_id(ad_account_id):
-    ad_account_id = ad_account_id.strip()
-    if ad_account_id.startswith("act_"):
-        return ad_account_id
-    return f"act_{ad_account_id}"
+def _account_id_values(raw_account_ids):
+    if raw_account_ids is None:
+        return []
+    if isinstance(raw_account_ids, (list, tuple)):
+        values = []
+        for account_id in raw_account_ids:
+            values.extend(_account_id_values(account_id))
+        return values
+    return str(raw_account_ids).split(",")
 
 
-def _fetch_ad_insights(requests, access_token, ad_account_id, date_config):
+def _clean_account_id(account_id):
+    return str(account_id).strip().strip('"').strip("'").strip()
+
+
+def _new_request_counts():
+    return {
+        "insight_requests": 0,
+        "creative_batch_requests": 0,
+        "image_batch_requests": 0,
+        "retries": 0,
+    }
+
+
+def _log_request_counts(request_counts, account_count, row_count):
+    print(
+        "META_API_REQUEST_SUMMARY "
+        f"accounts={account_count} "
+        f"rows={row_count} "
+        f"insight_requests={request_counts['insight_requests']} "
+        f"creative_batch_requests={request_counts['creative_batch_requests']} "
+        f"image_batch_requests={request_counts['image_batch_requests']} "
+        f"retries={request_counts['retries']}",
+        flush=True,
+    )
+
+
+def _fetch_ad_insights(requests, access_token, ad_account_id, date_config, request_counts):
     print("CALLING META API", flush=True)
     url = f"{BASE_URL}/{ad_account_id}/insights"
     params = {
@@ -261,7 +313,14 @@ def _fetch_ad_insights(requests, access_token, ad_account_id, date_config):
     rows = []
     while url:
         try:
-            response = _get_with_backoff(requests, url, params=params, timeout=120)
+            response = _get_with_backoff(
+                requests,
+                url,
+                params=params,
+                timeout=120,
+                request_counts=request_counts,
+                counter_name="insight_requests",
+            )
         except requests.RequestException as error:
             print("META API ERROR", flush=True)
             print(f"Connection failed: {error.__class__.__name__}", flush=True)
@@ -302,13 +361,24 @@ def _safe_meta_error_message(response):
     return message
 
 
-def _get_with_backoff(requests, url, params=None, timeout=30):
+def _get_with_backoff(
+    requests,
+    url,
+    params=None,
+    timeout=30,
+    request_counts=None,
+    counter_name=None,
+):
     retry_count = 0
     while True:
+        if request_counts is not None and counter_name:
+            request_counts[counter_name] += 1
         response = requests.get(url, params=params, timeout=timeout)
         if not _should_retry_response(response) or retry_count >= MAX_SAFE_RETRIES:
             return response
         retry_count += 1
+        if request_counts is not None:
+            request_counts["retries"] += 1
         retry_after = _retry_after_seconds(response)
         print(
             f"Meta API transient response {response.status_code}; retrying once after {retry_after}s",
@@ -352,7 +422,7 @@ def _meta_error_payload(response):
     return error_payload if isinstance(error_payload, dict) else {}
 
 
-def _fetch_ad_creatives(requests, access_token, ad_account_id, rows):
+def _fetch_ad_creatives(requests, access_token, ad_account_id, rows, request_counts):
     ad_ids = _top_ad_ids_by_spend(rows, CREATIVE_FETCH_LIMIT)
     creative_data = {}
     rate_limited = False
@@ -378,7 +448,14 @@ def _fetch_ad_creatives(requests, access_token, ad_account_id, rows):
             "fields": fields,
         }
         try:
-            response = _get_with_backoff(requests, url, params=params, timeout=30)
+            response = _get_with_backoff(
+                requests,
+                url,
+                params=params,
+                timeout=30,
+                request_counts=request_counts,
+                counter_name="creative_batch_requests",
+            )
         except requests.RequestException as error:
             print(
                 f"Creative preview batch fetch failed: {error.__class__.__name__}",
@@ -423,7 +500,7 @@ def _fetch_ad_creatives(requests, access_token, ad_account_id, rows):
             }
 
     image_urls, image_rate_limited = _fetch_ad_images(
-        requests, access_token, ad_account_id, image_hashes
+        requests, access_token, ad_account_id, image_hashes, request_counts
     )
     rate_limited = rate_limited or image_rate_limited
     for creative in creative_data.values():
@@ -455,7 +532,7 @@ def _object_story_image_hash(object_story_spec):
     return link_data.get("image_hash", "")
 
 
-def _fetch_ad_images(requests, access_token, ad_account_id, image_hashes):
+def _fetch_ad_images(requests, access_token, ad_account_id, image_hashes, request_counts):
     image_urls = {}
     rate_limited = False
     if not image_hashes:
@@ -471,7 +548,14 @@ def _fetch_ad_images(requests, access_token, ad_account_id, image_hashes):
             "fields": "hash,url,url_128",
         }
         try:
-            response = _get_with_backoff(requests, url, params=params, timeout=30)
+            response = _get_with_backoff(
+                requests,
+                url,
+                params=params,
+                timeout=30,
+                request_counts=request_counts,
+                counter_name="image_batch_requests",
+            )
         except requests.RequestException as error:
             print(
                 f"Creative image hash fetch failed: {error.__class__.__name__}",
