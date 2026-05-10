@@ -18,7 +18,6 @@ if str(APP_DIR) not in sys.path:
 from charts import (
     cost_per_result_trend,
     frequency_vs_ctr,
-    leads_and_inbox_trend,
     spend_vs_results_by_day,
     top_creatives_by_inbox_messages,
     top_creatives_by_leads,
@@ -56,6 +55,9 @@ PROJECT_NAMES = [
 ]
 PROJECT_FILTER_OPTIONS = PROJECT_NAMES + ["Other"]
 PROJECT_MATCH_ORDER = sorted(PROJECT_NAMES, key=len, reverse=True)
+PROJECT_ALIASES = {
+    "M2-KPEK": "M-KPEK",
+}
 SORT_OPTIONS = [
     "Spend",
     "Results",
@@ -93,6 +95,7 @@ STATE_PRESET = "preset"
 STATE_FETCH_REQUEST_KEY = "fetch_request_key"
 STATE_CACHE_STATUS = "cache_status"
 STATE_DATA_SOURCE_WARNING = "data_source_warning"
+STATE_REPORT_UPDATED_AT = "report_updated_at"
 META_CACHE_TTL_SECONDS = 30 * 60
 
 
@@ -114,6 +117,25 @@ def _safe_divide(numerator, denominator):
     return safe_divide_value(numerator, denominator)
 
 
+def _display_separation_note():
+    st.caption("Lead and Inbox metrics are separated by Primary Result Type.")
+
+
+def _blank_non_primary_result_metrics(display_df):
+    display_df = display_df.copy()
+    if "Primary Result Type" not in display_df.columns:
+        return display_df
+    lead_rows = display_df["Primary Result Type"] == "Lead"
+    inbox_rows = display_df["Primary Result Type"] == "Inbox"
+    for column in ["Inbox Messages", "Cost per Inbox"]:
+        if column in display_df.columns:
+            display_df.loc[lead_rows, column] = pd.NA
+    for column in ["Leads", "Cost per Lead"]:
+        if column in display_df.columns:
+            display_df.loc[inbox_rows, column] = pd.NA
+    return display_df
+
+
 def _primary_result_type(row):
     """Classify dashboard primary result intent before applying shared metric math."""
     campaign_name = str(row.get("campaign", "")).lower()
@@ -122,7 +144,7 @@ def _primary_result_type(row):
         return "Inbox"
     if "leadgen" in campaign_name or "lead" in campaign_name or "lead" in result_type:
         return "Lead"
-    return "Mixed"
+    return "Mixed / Unknown"
 
 
 def _apply_primary_result_logic(df):
@@ -529,15 +551,23 @@ def _load_dashboard_data(use_custom_range, date_from, date_to, preset, raise_rat
             )
 
     date_range_label = meta_df.attrs.get("date_range_label", "")
+    report_updated_at = meta_df.attrs.get("report_updated_at") or meta_df.attrs.get(
+        "cache_created_at", ""
+    )
     data_source_warning = meta_df.attrs.get("data_source_warning", "")
     cache_status = meta_df.attrs.get("cache_status", "")
     meta_df["date"] = pd.to_datetime(meta_df["date"])
     if "adset" not in meta_df.columns:
         meta_df["adset"] = ""
     meta_df = add_metrics(meta_df)
-    meta_df["project"] = meta_df["campaign"].apply(_extract_project)
+    meta_df["project"] = meta_df.apply(
+        lambda row: _extract_project(row["campaign"], row["adset"]), axis=1
+    )
     meta_df = _apply_primary_result_logic(meta_df)
     meta_df.attrs["date_range_label"] = date_range_label
+    meta_df.attrs["report_updated_at"] = report_updated_at or datetime.utcnow().isoformat(
+        timespec="seconds"
+    )
     if cache_status:
         meta_df.attrs["cache_status"] = cache_status
     if data_source_warning:
@@ -573,6 +603,9 @@ def _load_file_cache():
         print(f"File cache load failed: {error.__class__.__name__}", flush=True)
         return None
     cached_df.attrs["date_range_label"] = "Report Date Range: Cached File"
+    cached_df.attrs["report_updated_at"] = datetime.utcfromtimestamp(
+        FILE_CACHE_PATH.stat().st_mtime
+    ).isoformat(timespec="seconds")
     cached_df.attrs["cache_status"] = "CACHED FILE DATA"
     return cached_df
 
@@ -586,6 +619,7 @@ def _restore_file_cache_to_session():
     st.session_state[STATE_FETCH_REQUEST_KEY] = ""
     st.session_state[STATE_CACHE_STATUS] = "CACHED FILE DATA"
     st.session_state[STATE_DATA_SOURCE_WARNING] = cached_df.attrs.get("data_source_warning", "")
+    st.session_state[STATE_REPORT_UPDATED_AT] = cached_df.attrs.get("report_updated_at", "")
     return True
 
 
@@ -599,7 +633,15 @@ def _should_save_file_cache(ads_df):
     return True
 
 
-def _render_cache_status(status_slot, ttl_slot):
+def _render_sidebar_data_controls(
+    status_slot,
+    updated_slot,
+    csv_slot,
+    ttl_slot,
+    ads_df=None,
+    filtered_df=None,
+    report_updated_at="",
+):
     status = st.session_state.get(STATE_CACHE_STATUS, "No cached report")
     if status == "CACHED FILE DATA":
         data_source = "CACHED FILE DATA"
@@ -608,14 +650,30 @@ def _render_cache_status(status_slot, ttl_slot):
     else:
         data_source = "No report loaded"
     status_slot.caption(f"Data source: {data_source}")
+    updated_slot.caption(f"Last updated: {report_updated_at} UTC" if report_updated_at else "Last updated: -")
+    if ads_df is not None:
+        csv_df = filtered_df if filtered_df is not None and not filtered_df.empty else ads_df
+        csv_slot.download_button(
+            "Download current CSV",
+            data=csv_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="current-meta-ads.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    else:
+        csv_slot.empty()
     ttl_slot.caption(f"Meta cache TTL: {META_CACHE_TTL_SECONDS // 60} minutes")
 
 
-def _extract_project(campaign_name):
-    campaign_name = str(campaign_name or "").upper()
-    for project_name in PROJECT_MATCH_ORDER:
-        if project_name.upper() in campaign_name:
-            return project_name
+def _extract_project(campaign_name, adset_name=""):
+    for source_name in (campaign_name, adset_name):
+        source_name = str(source_name or "").upper()
+        for alias, project_name in PROJECT_ALIASES.items():
+            if alias.upper() in source_name:
+                return project_name
+        for project_name in PROJECT_MATCH_ORDER:
+            if project_name.upper() in source_name:
+                return project_name
     return "Other"
 
 
@@ -656,6 +714,7 @@ def _card_grid(cards, card_class="kpi-card"):
 
 
 def _kpi_cards(filtered_df):
+    _display_separation_note()
     total_spend = filtered_df["spend"].sum()
     total_results = filtered_df["results"].sum()
     inbox_df = filtered_df[filtered_df["primary_result_type"] == "Inbox"]
@@ -683,28 +742,41 @@ def _kpi_cards(filtered_df):
 
     cards = [
         {"group": "Efficiency", "label": "Total Spend", "value": _format_currency(total_spend)},
-        {"group": "Lead Generation", "label": "Total Results", "value": _format_number(total_results)},
-        {"group": "Messaging", "label": "Inbox Messages", "value": _format_number(total_inbox)},
-        {"group": "Lead Generation", "label": "Leads", "value": _format_number(total_leads)},
+        {"group": "Efficiency", "label": "Primary Results", "value": _format_number(total_results)},
         {
             "group": "Efficiency",
             "label": "Cost per Result",
             "value": _format_currency(_safe_divide(total_spend, total_results)),
         },
-        {
-            "group": "Messaging",
-            "label": "Cost per Inbox",
-            "value": _format_currency(_safe_divide(inbox_spend, total_inbox)),
-            "class": cost_per_inbox_class,
-            "detail": cost_per_inbox_detail,
-        },
-        {
-            "group": "Lead Generation",
-            "label": "Cost per Lead",
-            "value": _format_currency(_safe_divide(lead_spend, total_leads)),
-            "class": cost_per_lead_class,
-            "detail": cost_per_lead_detail,
-        },
+    ]
+    if not inbox_df.empty:
+        cards.extend(
+            [
+                {"group": "Messaging", "label": "Inbox Messages", "value": _format_number(total_inbox)},
+                {
+                    "group": "Messaging",
+                    "label": "Cost per Inbox",
+                    "value": _format_currency(_safe_divide(inbox_spend, total_inbox)),
+                    "class": cost_per_inbox_class,
+                    "detail": cost_per_inbox_detail,
+                },
+            ]
+        )
+    if not lead_df.empty:
+        cards.extend(
+            [
+                {"group": "Lead Generation", "label": "Leads", "value": _format_number(total_leads)},
+                {
+                    "group": "Lead Generation",
+                    "label": "Cost per Lead",
+                    "value": _format_currency(_safe_divide(lead_spend, total_leads)),
+                    "class": cost_per_lead_class,
+                    "detail": cost_per_lead_detail,
+                },
+            ]
+        )
+    cards.extend(
+        [
         {
             "group": "Audience Quality",
             "label": "CTR",
@@ -720,7 +792,8 @@ def _kpi_cards(filtered_df):
             "label": "Frequency",
             "value": f"{_safe_divide(total_impressions, total_reach):.2f}",
         },
-    ]
+        ]
+    )
     _card_grid(cards)
 
 
@@ -857,11 +930,15 @@ def _executive_action_plan(filtered_df, campaign_df, adset_df, creative_df):
 
 
 
-def _thai_performance_agency_summary(filtered_df, campaign_df, adset_df, creative_df):
+def _thai_performance_agency_summary_bullets(filtered_df, campaign_df, adset_df, creative_df):
     total_spend = filtered_df["spend"].sum()
     total_results = filtered_df["results"].sum()
-    total_inbox = filtered_df.get("inbox_messages", pd.Series(dtype=float)).sum()
-    total_leads = filtered_df.get("leads", pd.Series(dtype=float)).sum()
+    inbox_df = filtered_df[filtered_df["primary_result_type"] == "Inbox"]
+    lead_df = filtered_df[filtered_df["primary_result_type"] == "Lead"]
+    total_inbox = inbox_df.get("inbox_messages", pd.Series(dtype=float)).sum()
+    total_leads = lead_df.get("leads", pd.Series(dtype=float)).sum()
+    inbox_spend = inbox_df["spend"].sum()
+    lead_spend = lead_df["spend"].sum()
 
     cost_per_result = _safe_divide(total_spend, total_results)
     overall_ctr = (
@@ -883,9 +960,14 @@ def _thai_performance_agency_summary(filtered_df, campaign_df, adset_df, creativ
             f"{_format_currency(cost_per_result)} ต้องบริหารงบด้วยตัวเลข ไม่ใช่ความรู้สึก."
         ),
         (
-            f"Funnel ยังมีจุดรั่วชัดเจน: Inbox {_format_number(total_inbox)} ครั้ง "
-            f"แต่ปิดเป็น Lead ได้ {_format_number(total_leads)} ราย ต้องตรวจคุณภาพแชต "
-            "ข้อเสนอ หน้า Landing Page และความเร็วในการ Follow-up ทันที."
+            "Lead และ Inbox ถูกแยกตาม Primary Result Type: "
+            f"Lead campaigns ใช้งบ {_format_currency(lead_spend)} ได้ Lead {_format_number(total_leads)} ราย "
+            f"ที่ {_format_currency(_safe_divide(lead_spend, total_leads))} ต่อ Lead."
+        ),
+        (
+            f"Inbox campaigns ใช้งบ {_format_currency(inbox_spend)} ได้ Inbox "
+            f"{_format_number(total_inbox)} ครั้ง ที่ {_format_currency(_safe_divide(inbox_spend, total_inbox))} ต่อ Inbox "
+            "ไม่เอา Lead และ Inbox มาปนกันในการตัดสินประสิทธิภาพ."
         ),
     ]
 
@@ -934,9 +1016,18 @@ def _thai_performance_agency_summary(filtered_df, campaign_df, adset_df, creativ
             "ต้องแก้จุดคัดกรอง Lead Form, Landing Page และกระบวนการ Follow-up ไม่ใช่เพิ่มงบอย่างเดียว."
         )
 
+    return bullets
+
+
+def _thai_performance_agency_summary(filtered_df, campaign_df, adset_df, creative_df):
+    bullets = _thai_performance_agency_summary_bullets(
+        filtered_df, campaign_df, adset_df, creative_df
+    )
     st.markdown("### สรุป Performance")
+    _display_separation_note()
     for bullet in bullets:
         st.markdown(f"- {bullet}")
+    return bullets
 
 
 def _scale_opportunity_insights(campaign_df, adset_df, overall_cpr, overall_ctr):
@@ -1069,6 +1160,7 @@ def _insight_item_html(insight):
 
 def _campaign_table(campaign_df):
     st.markdown('<div class="section-title">Campaign Performance</div>', unsafe_allow_html=True)
+    _display_separation_note()
     sorted_df = campaign_df.sort_values("spend", ascending=False).copy()
 
     columns = [
@@ -1087,10 +1179,6 @@ def _campaign_table(campaign_df):
         "Frequency",
     ]
     display_df = sorted_df[columns].copy()
-    display_df.loc[display_df["primary_result_type"] == "Inbox", ["leads", "cost_per_lead"]] = pd.NA
-    display_df.loc[
-        display_df["primary_result_type"] == "Lead", ["inbox_messages", "cost_per_inbox"]
-    ] = pd.NA
     display_df = display_df.rename(
         columns={
             "campaign": "Campaign",
@@ -1105,6 +1193,7 @@ def _campaign_table(campaign_df):
             "cost_per_lead": "Cost per Lead",
         }
     )
+    display_df = _blank_non_primary_result_metrics(display_df)
 
     lead_costs = pd.to_numeric(display_df["Cost per Lead"], errors="coerce")
     result_costs = pd.to_numeric(display_df["Cost per Result"], errors="coerce")
@@ -1141,6 +1230,8 @@ def _campaign_table(campaign_df):
 
 def _adset_table(adset_df):
     st.markdown('<div class="section-title">Ad Set Performance</div>', unsafe_allow_html=True)
+    st.caption("Only primary result metrics are shown in this table.")
+    _display_separation_note()
     columns = [
         "project",
         "campaign",
@@ -1172,12 +1263,13 @@ def _adset_table(adset_df):
             "cost_per_lead": "Cost per Lead",
         }
     )
+    display_df = _blank_non_primary_result_metrics(display_df)
     styled = display_df.style.format(
         {
             "Spend": _format_currency,
             "Results": "{:,.0f}",
-            "Inbox Messages": "{:,.0f}",
-            "Leads": "{:,.0f}",
+            "Inbox Messages": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
+            "Leads": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
             "Cost per Result": _format_currency,
             "Cost per Inbox": _format_currency,
             "Cost per Lead": _format_currency,
@@ -1389,11 +1481,25 @@ def _dashboard_adset_summary(filtered_df, sort_by):
             clicks=("clicks", "sum"),
         )
     )
+    grouped["results"] = grouped.apply(
+        lambda row: row["leads"]
+        if row["primary_result_type"] == "Lead"
+        else row["inbox_messages"]
+        if row["primary_result_type"] == "Inbox"
+        else row["results"],
+        axis=1,
+    )
     grouped["cost_per_inbox"] = grouped.apply(
-        lambda row: _safe_divide(row["spend"], row["inbox_messages"]), axis=1
+        lambda row: pd.NA
+        if row["primary_result_type"] == "Lead"
+        else _safe_divide(row["spend"], row["inbox_messages"]),
+        axis=1,
     )
     grouped["cost_per_lead"] = grouped.apply(
-        lambda row: _safe_divide(row["spend"], row["leads"]), axis=1
+        lambda row: pd.NA
+        if row["primary_result_type"] == "Inbox"
+        else _safe_divide(row["spend"], row["leads"]),
+        axis=1,
     )
     grouped = _add_weighted_metrics(grouped)
     return _sort_summary(grouped, sort_by)
@@ -1441,7 +1547,7 @@ def _project_summary(filtered_df, sort_by, top_n):
         rollup_df["primary_result_type"] == "Lead", 0
     )
     grouped = (
-        rollup_df.groupby("project", as_index=False)
+        rollup_df.groupby(["project", "primary_result_type"], as_index=False)
         .agg(
             spend=("spend", "sum"),
             results=("results", "sum"),
@@ -1455,6 +1561,14 @@ def _project_summary(filtered_df, sort_by, top_n):
             reach=("reach", "sum"),
             clicks=("clicks", "sum"),
         )
+    )
+    grouped["results"] = grouped.apply(
+        lambda row: row["leads"]
+        if row["primary_result_type"] == "Lead"
+        else row["inbox_messages"]
+        if row["primary_result_type"] == "Inbox"
+        else row["results"],
+        axis=1,
     )
     grouped["cost_per_inbox"] = grouped.apply(
         lambda row: pd.NA
@@ -1561,6 +1675,7 @@ def _aggregation_check(filtered_df):
 
 def _project_performance(project_df):
     st.markdown('<div class="section-title">Project Performance</div>', unsafe_allow_html=True)
+    _display_separation_note()
     if _verify_project_aggregation(project_df):
         st.caption(
             "Project costs are recalculated after grouping: total spend / primary results, inbox campaign spend / inbox campaign results, and lead campaign spend / lead campaign results."
@@ -1568,6 +1683,7 @@ def _project_performance(project_df):
     display_df = project_df[
         [
             "project",
+            "primary_result_type",
             "spend",
             "results",
             "inbox_messages",
@@ -1582,6 +1698,7 @@ def _project_performance(project_df):
     ].rename(
         columns={
             "project": "Project",
+            "primary_result_type": "Primary Result Type",
             "spend": "Spend",
             "results": "Results",
             "inbox_messages": "Inbox Messages",
@@ -1591,12 +1708,13 @@ def _project_performance(project_df):
             "cost_per_lead": "Cost per Lead",
         }
     )
+    display_df = _blank_non_primary_result_metrics(display_df)
     styled = display_df.style.format(
         {
             "Spend": _format_currency,
             "Results": "{:,.0f}",
-            "Inbox Messages": "{:,.0f}",
-            "Leads": "{:,.0f}",
+            "Inbox Messages": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
+            "Leads": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
             "Cost per Result": _format_currency,
             "Cost per Inbox": _format_currency,
             "Cost per Lead": _format_currency,
@@ -1608,8 +1726,12 @@ def _project_performance(project_df):
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
     chart_columns = st.columns(2)
-    inbox_df = project_df.sort_values("inbox_messages", ascending=False)
-    leads_df = project_df.sort_values("leads", ascending=False)
+    inbox_df = project_df[project_df["primary_result_type"] == "Inbox"].sort_values(
+        "inbox_messages", ascending=False
+    )
+    leads_df = project_df[project_df["primary_result_type"] == "Lead"].sort_values(
+        "leads", ascending=False
+    )
     cpi_df = project_df[project_df["inbox_campaign_results"] > 0].sort_values(
         "cost_per_inbox", ascending=True
     )
@@ -1676,6 +1798,29 @@ def _top_campaigns_by_results(campaign_df):
     return fig
 
 
+def _top_inbox_campaigns_by_cost_per_inbox(campaign_df):
+    chart_df = (
+        campaign_df[
+            (campaign_df["primary_result_type"] == "Inbox")
+            & (campaign_df["inbox_messages"] > 0)
+            & (campaign_df["cost_per_inbox"].notna())
+        ]
+        .sort_values("cost_per_inbox")
+        .head(10)
+    )
+    fig = px.bar(
+        chart_df,
+        x="cost_per_inbox",
+        y="campaign",
+        orientation="h",
+        color="inbox_messages",
+        title="Top 10 Inbox Campaigns by Cost per Inbox",
+    )
+    fig.update_xaxes(title="Cost per Inbox (฿)")
+    fig.update_layout(yaxis={"categoryorder": "total descending"})
+    return fig
+
+
 def _top_campaigns_by_cost_per_lead(campaign_df):
     chart_df = (
         campaign_df[
@@ -1708,7 +1853,7 @@ def _creative_cost_efficiency(creative_df):
         orientation="h",
         color="campaign",
         title="Creative Cost Efficiency",
-        hover_data=["leads", "inbox_messages", "Cost per Lead", "Cost per Inbox"],
+        hover_data=["primary_result_type", "results", "Cost per Result"],
     )
     fig.update_layout(yaxis={"categoryorder": "total descending"})
     return fig
@@ -1722,7 +1867,7 @@ def _creative_fatigue_risk(creative_df):
         size="spend",
         color="Cost per Result",
         hover_name="ad",
-        hover_data=["campaign", "results", "leads", "inbox_messages"],
+        hover_data=["campaign", "primary_result_type", "results"],
         title="Creative Fatigue Risk",
     )
     fig.update_yaxes(title="CTR (%)")
@@ -1747,6 +1892,13 @@ def _render_preview_image(container, preview_url):
             '<div class="no-preview">Preview not available</div>',
             unsafe_allow_html=True,
         )
+
+
+def _preview_unavailable_label(row):
+    reason = str(row.get("preview_reason", "") or "").strip()
+    if reason and reason not in {"no_usable_media_returned", "image_hash_pending"}:
+        return f"Preview not available: {reason}"
+    return "Preview not available"
 
 
 def _metric_cell(label, value):
@@ -1775,16 +1927,13 @@ def _creative_preview_rows(creative_df):
         image_html = (
             f'<img src="{escape(preview_url)}" width="120" style="width:120px;height:auto;border-radius:8px;display:block;">'
             if preview_url
-            else '<div class="no-preview">Preview not available</div>'
+            else f'<div class="no-preview">{escape(_preview_unavailable_label(row))}</div>'
         )
         metrics_html = "".join(
             [
                 _metric_cell("Spend", _format_currency(row["spend"])),
                 _metric_cell("Results", _format_number(row["results"])),
-                _metric_cell(
-                    "Inbox / Leads",
-                    f'{_format_number(row["inbox_messages"])} / {_format_number(row["leads"])}',
-                ),
+                _metric_cell(str(row.get("primary_result_type", "Primary")), _format_number(row["results"])),
                 _metric_cell("Cost / Result", _format_currency(row["Cost per Result"])),
             ]
         )
@@ -1821,18 +1970,28 @@ def _creative_gallery(creative_df):
                     st.caption(row["campaign"])
                     st.write(f"Spend: {_format_currency(row['spend'])}")
                     st.write(f"Results: {_format_number(row['results'])}")
-                    st.write(f"Inbox Messages: {_format_number(row['inbox_messages'])}")
-                    st.write(f"Leads: {_format_number(row['leads'])}")
+                    if row.get("primary_result_type") == "Lead":
+                        st.write(f"Leads: {_format_number(row['leads'])}")
+                    elif row.get("primary_result_type") == "Inbox":
+                        st.write(f"Inbox Messages: {_format_number(row['inbox_messages'])}")
                     st.write(f"Cost per Result: {_format_currency(row['Cost per Result'])}")
-                    st.write(f"Cost per Lead: {_format_currency(row['Cost per Lead'])}")
+                    if row.get("primary_result_type") == "Lead":
+                        st.write(f"Cost per Lead: {_format_currency(row['Cost per Lead'])}")
+                    elif row.get("primary_result_type") == "Inbox":
+                        st.write(f"Cost per Inbox: {_format_currency(row['Cost per Inbox'])}")
 
 
-def _charts(daily_df, campaign_df):
+def _charts(lead_daily_df, inbox_daily_df, campaign_df):
     st.markdown('<div class="section-title">Performance Trends</div>', unsafe_allow_html=True)
+    _display_separation_note()
+    lead_campaign_df = campaign_df[campaign_df["primary_result_type"] == "Lead"]
+    inbox_campaign_df = campaign_df[campaign_df["primary_result_type"] == "Inbox"]
     rows = [
-        [spend_vs_results_by_day(daily_df), cost_per_result_trend(daily_df)],
-        [leads_and_inbox_trend(daily_df), _top_campaigns_by_results(campaign_df)],
-        [_top_campaigns_by_cost_per_lead(campaign_df), frequency_vs_ctr(campaign_df)],
+        [spend_vs_results_by_day(lead_daily_df), cost_per_result_trend(lead_daily_df)],
+        [_top_campaigns_by_results(lead_campaign_df), _top_campaigns_by_cost_per_lead(lead_campaign_df)],
+        [spend_vs_results_by_day(inbox_daily_df), cost_per_result_trend(inbox_daily_df)],
+        [_top_campaigns_by_results(inbox_campaign_df), _top_inbox_campaigns_by_cost_per_inbox(inbox_campaign_df)],
+        [frequency_vs_ctr(lead_campaign_df), frequency_vs_ctr(inbox_campaign_df)],
     ]
     for row in rows:
         columns = st.columns(2)
@@ -1842,13 +2001,17 @@ def _charts(daily_df, campaign_df):
 
 def _creative_section(creative_df):
     st.markdown('<div class="section-title">Creative Performance</div>', unsafe_allow_html=True)
+    _display_separation_note()
     _creative_preview_rows(creative_df)
 
     columns = [
         "ad",
         "campaign",
+        "primary_result_type",
         "creative_id",
         "creative_name",
+        "creative_media_source",
+        "preview_reason",
         "spend",
         "results",
         "inbox_messages",
@@ -1860,11 +2023,24 @@ def _creative_section(creative_df):
         "Cost per Lead",
         "Frequency",
     ]
-    st.dataframe(creative_df[columns], use_container_width=True, hide_index=True)
+    display_df = creative_df[columns].rename(columns={"primary_result_type": "Primary Result Type"})
+    display_df = _blank_non_primary_result_metrics(
+        display_df.rename(
+            columns={
+                "inbox_messages": "Inbox Messages",
+                "leads": "Leads",
+                "Cost per Inbox": "Cost per Inbox",
+                "Cost per Lead": "Cost per Lead",
+            }
+        )
+    )
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
 
+    lead_creative_df = creative_df[creative_df["primary_result_type"] == "Lead"]
+    inbox_creative_df = creative_df[creative_df["primary_result_type"] == "Inbox"]
     rows = [
-        [top_creatives_by_leads(creative_df), top_creatives_by_inbox_messages(creative_df)],
-        [_creative_cost_efficiency(creative_df), _creative_fatigue_risk(creative_df)],
+        [top_creatives_by_leads(lead_creative_df), top_creatives_by_inbox_messages(inbox_creative_df)],
+        [_creative_cost_efficiency(lead_creative_df), _creative_fatigue_risk(inbox_creative_df)],
     ]
     for row in rows:
         chart_columns = st.columns(2)
@@ -1941,6 +2117,35 @@ def _management_notes(campaign_df):
     st.markdown(html, unsafe_allow_html=True)
 
 
+def _unmapped_campaigns_debug(ads_df):
+    with st.expander("Unmapped Campaigns (Other)", expanded=False):
+        other_df = ads_df[ads_df["project"] == "Other"]
+        if other_df.empty:
+            st.caption("No campaigns or ad sets are currently mapped to Other.")
+            return
+
+        debug_df = (
+            other_df.groupby(["campaign", "adset"], as_index=False)
+            .agg(
+                spend=("spend", "sum"),
+                leads=("leads", "sum"),
+                inbox_messages=("inbox_messages", "sum"),
+            )
+            .sort_values("spend", ascending=False)
+            .rename(
+                columns={
+                    "campaign": "campaign_name",
+                    "adset": "adset_name",
+                }
+            )
+        )
+        st.dataframe(
+            debug_df[["campaign_name", "adset_name", "spend", "leads", "inbox_messages"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
 def main():
     st.set_page_config(page_title="Real Estate Meta Ads Dashboard", layout="wide")
     _styles()
@@ -1962,14 +2167,22 @@ def main():
             st.session_state.pop(STATE_DATE_RANGE_LABEL, None)
             st.session_state.pop(STATE_FETCH_REQUEST_KEY, None)
             st.session_state.pop(STATE_DATA_SOURCE_WARNING, None)
+            st.session_state.pop(STATE_REPORT_UPDATED_AT, None)
             st.session_state[STATE_CACHE_STATUS] = "Cache cleared"
             st.success("Meta data cache cleared. Click Generate Report to fetch again.")
         generate = st.button(
             "Generate Report", type="primary", use_container_width=True, key="generate_report"
         )
         cache_status_slot = st.empty()
+        last_updated_slot = st.empty()
+        csv_download_slot = st.empty()
         cache_ttl_slot = st.empty()
-        _render_cache_status(cache_status_slot, cache_ttl_slot)
+        _render_sidebar_data_controls(
+            cache_status_slot,
+            last_updated_slot,
+            csv_download_slot,
+            cache_ttl_slot,
+        )
 
     restored_file_cache = False
     if not generate and STATE_ADS_DF not in st.session_state:
@@ -2003,6 +2216,10 @@ def main():
             ):
                 ads_df = st.session_state[STATE_ADS_DF]
                 st.session_state[STATE_CACHE_STATUS] = "Session cache hit"
+                st.session_state[STATE_REPORT_UPDATED_AT] = ads_df.attrs.get(
+                    "report_updated_at",
+                    st.session_state.get(STATE_REPORT_UPDATED_AT, ""),
+                )
                 if _should_save_file_cache(ads_df):
                     _save_file_cache(ads_df)
             else:
@@ -2024,6 +2241,9 @@ def main():
                 )
                 st.session_state[STATE_DATA_SOURCE_WARNING] = ads_df.attrs.get(
                     "data_source_warning", ""
+                )
+                st.session_state[STATE_REPORT_UPDATED_AT] = ads_df.attrs.get(
+                    "report_updated_at", ""
                 )
                 if _should_save_file_cache(ads_df):
                     _save_file_cache(ads_df)
@@ -2047,20 +2267,44 @@ def main():
     else:
         ads_df = st.session_state[STATE_ADS_DF]
         ads_df.attrs["date_range_label"] = st.session_state.get(STATE_DATE_RANGE_LABEL, "")
-
-    _render_cache_status(cache_status_slot, cache_ttl_slot)
+        ads_df.attrs["report_updated_at"] = st.session_state.get(STATE_REPORT_UPDATED_AT, "")
 
     if ads_df.empty:
+        _render_sidebar_data_controls(
+            cache_status_slot,
+            last_updated_slot,
+            csv_download_slot,
+            cache_ttl_slot,
+            ads_df=ads_df,
+            report_updated_at=ads_df.attrs.get(
+                "report_updated_at", st.session_state.get(STATE_REPORT_UPDATED_AT, "")
+            ),
+        )
         st.warning("Meta returned no rows for this range.")
         return
 
     filtered_df, top_n, sort_by = _top_level_filters(ads_df)
+    report_updated_at = ads_df.attrs.get(
+        "report_updated_at", st.session_state.get(STATE_REPORT_UPDATED_AT, "")
+    )
+    _render_sidebar_data_controls(
+        cache_status_slot,
+        last_updated_slot,
+        csv_download_slot,
+        cache_ttl_slot,
+        ads_df=ads_df,
+        filtered_df=filtered_df,
+        report_updated_at=report_updated_at,
+    )
     if filtered_df.empty:
-        st.warning("No rows match the selected project or campaign filters.")
+        st.warning("No rows match current filters.")
         return
 
     project_df = _project_summary(filtered_df, sort_by, top_n)
-    daily_df = daily_summary(filtered_df)
+    lead_filtered_df = filtered_df[filtered_df["primary_result_type"] == "Lead"]
+    inbox_filtered_df = filtered_df[filtered_df["primary_result_type"] == "Inbox"]
+    lead_daily_df = daily_summary(lead_filtered_df)
+    inbox_daily_df = daily_summary(inbox_filtered_df)
     campaign_df = _dashboard_campaign_summary(filtered_df).sort_values("spend", ascending=False)
     adset_df = _dashboard_adset_summary(filtered_df, sort_by)
     creative_df = creative_summary(filtered_df)
@@ -2073,9 +2317,10 @@ def main():
     _aggregation_check(filtered_df)
     _project_performance(project_df)
     _management_notes(campaign_df)
+    _unmapped_campaigns_debug(ads_df)
     _campaign_table(campaign_df)
     _adset_table(adset_df)
-    _charts(daily_df, campaign_df)
+    _charts(lead_daily_df, inbox_daily_df, campaign_df)
     _creative_section(creative_df)
 
 

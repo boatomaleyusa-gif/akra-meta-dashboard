@@ -68,7 +68,7 @@ def frequency_vs_ctr(campaign_df):
         y="CTR",
         size="spend",
         color="campaign",
-        hover_data=["results", "result_type", "leads", "inbox_messages", "Cost per Result"],
+        hover_data=["results", "primary_result_type", "Cost per Result"],
         title="Frequency vs CTR by Campaign",
     )
     fig.update_yaxes(title="CTR (%)")

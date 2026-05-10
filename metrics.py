@@ -64,6 +64,8 @@ def add_metrics(df):
         "image_url",
         "object_story_image_hash",
         "creative_preview_url",
+        "preview_reason",
+        "creative_media_source",
     ]:
         if column not in df.columns:
             df[column] = ""
@@ -154,6 +156,8 @@ def campaign_summary(df):
             image_url=("image_url", "first"),
             object_story_image_hash=("object_story_image_hash", "first"),
             creative_preview_url=("creative_preview_url", "first"),
+            preview_reason=("preview_reason", "first"),
+            creative_media_source=("creative_media_source", "first"),
         )
         .sort_values("spend", ascending=False)
     )
@@ -163,8 +167,11 @@ def campaign_summary(df):
 
 def creative_summary(df):
     """Group ads data by creative and campaign, then calculate creative metrics."""
+    group_columns = ["ad", "campaign"]
+    if "primary_result_type" in df.columns:
+        group_columns.append("primary_result_type")
     grouped = (
-        df.groupby(["ad", "campaign"], as_index=False)
+        df.groupby(group_columns, as_index=False)
         .agg(
             spend=("spend", "sum"),
             impressions=("impressions", "sum"),
@@ -180,6 +187,8 @@ def creative_summary(df):
             image_url=("image_url", "first"),
             object_story_image_hash=("object_story_image_hash", "first"),
             creative_preview_url=("creative_preview_url", "first"),
+            preview_reason=("preview_reason", "first"),
+            creative_media_source=("creative_media_source", "first"),
         )
         .sort_values("leads", ascending=False)
     )

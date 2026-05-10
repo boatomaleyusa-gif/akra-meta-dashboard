@@ -10,9 +10,8 @@ import pandas as pd
 
 API_VERSION = "v21.0"
 BASE_URL = f"https://graph.facebook.com/{API_VERSION}"
-CREATIVE_FETCH_LIMIT = 50
 CREATIVE_BATCH_SIZE = 50
-IMAGE_HASH_FETCH_LIMIT = 50
+IMAGE_HASH_FETCH_LIMIT = 500
 MAX_SAFE_RETRIES = 1
 RATE_LIMIT_MESSAGE = "Meta API rate limit reached. Please wait and try again."
 READ_ONLY_META_OPERATIONS = {
@@ -423,15 +422,15 @@ def _meta_error_payload(response):
 
 
 def _fetch_ad_creatives(requests, access_token, ad_account_id, rows, request_counts):
-    ad_ids = _top_ad_ids_by_spend(rows, CREATIVE_FETCH_LIMIT)
+    ad_ids = _ad_ids_by_spend(rows)
     creative_data = {}
     rate_limited = False
     if not ad_ids:
         return creative_data, rate_limited
 
     print(
-        f"FETCHING CREATIVE PREVIEWS: {len(ad_ids)} ads by top spend "
-        f"(limit {CREATIVE_FETCH_LIMIT})",
+        f"FETCHING CREATIVE PREVIEWS: {len(ad_ids)} ads by spend order "
+        f"(batch size {CREATIVE_BATCH_SIZE})",
         flush=True,
     )
     fields = (
@@ -462,13 +461,19 @@ def _fetch_ad_creatives(requests, access_token, ad_account_id, rows, request_cou
                 flush=True,
             )
             for ad_id in ad_id_batch:
-                creative_data[ad_id] = {}
+                creative_data[ad_id] = {
+                    "preview_reason": "creative_fetch_request_failed",
+                    "creative_media_source": "",
+                }
             continue
 
         if _is_app_rate_limit_response(response):
             print("Creative preview fetch stopped: Meta API rate limit reached", flush=True)
             for ad_id in ad_id_batch:
-                creative_data[ad_id] = {}
+                creative_data[ad_id] = {
+                    "preview_reason": RATE_LIMIT_MESSAGE,
+                    "creative_media_source": "",
+                }
             rate_limited = True
             break
 
@@ -478,25 +483,28 @@ def _fetch_ad_creatives(requests, access_token, ad_account_id, rows, request_cou
                 flush=True,
             )
             for ad_id in ad_id_batch:
-                creative_data[ad_id] = {}
+                creative_data[ad_id] = {
+                    "preview_reason": f"creative_fetch_status_{response.status_code}",
+                    "creative_media_source": "",
+                }
             continue
 
         payload = response.json()
         for ad_id in ad_id_batch:
             ad_payload = payload.get(ad_id, {})
             creative = ad_payload.get("creative") or {}
-            object_story_spec = creative.get("object_story_spec") or {}
-            image_hash = _object_story_image_hash(object_story_spec)
-            if image_hash and not (creative.get("thumbnail_url") or creative.get("image_url")):
-                image_hashes.add(image_hash)
+            media = _creative_media_candidates(creative)
+            image_hashes.update(media["image_hashes"])
             effective_story_id = creative.get("effective_object_story_id", "")
             creative_data[ad_id] = {
                 "creative_id": creative.get("id", ""),
                 "creative_name": creative.get("name", ""),
-                "thumbnail_url": creative.get("thumbnail_url", ""),
-                "image_url": creative.get("image_url", ""),
-                "object_story_image_hash": image_hash,
+                "thumbnail_url": media["thumbnail_url"],
+                "image_url": media["image_url"],
+                "object_story_image_hash": ",".join(sorted(media["image_hashes"])),
                 "creative_preview_url": _creative_preview_url(effective_story_id),
+                "preview_reason": media["preview_reason"],
+                "creative_media_source": media["creative_media_source"],
             }
 
     image_urls, image_rate_limited = _fetch_ad_images(
@@ -506,13 +514,22 @@ def _fetch_ad_creatives(requests, access_token, ad_account_id, rows, request_cou
     for creative in creative_data.values():
         if creative.get("thumbnail_url") or creative.get("image_url"):
             continue
-        image_hash = creative.get("object_story_image_hash")
-        if image_hash:
-            creative["image_url"] = image_urls.get(image_hash, "")
+        image_hashes = [
+            image_hash
+            for image_hash in str(creative.get("object_story_image_hash", "")).split(",")
+            if image_hash
+        ]
+        for image_hash in image_hashes:
+            image_url = image_urls.get(image_hash, "")
+            if image_url:
+                creative["image_url"] = image_url
+                creative["preview_reason"] = "media_found"
+                creative["creative_media_source"] = "image_hash"
+                break
     return creative_data, rate_limited
 
 
-def _top_ad_ids_by_spend(rows, limit):
+def _ad_ids_by_spend(rows):
     spend_by_ad_id = {}
     for row in rows:
         ad_id = row.get("ad_id")
@@ -523,13 +540,51 @@ def _top_ad_ids_by_spend(rows, limit):
         ad_id
         for ad_id, _ in sorted(
             spend_by_ad_id.items(), key=lambda item: item[1], reverse=True
-        )[:limit]
+        )
     ]
 
 
-def _object_story_image_hash(object_story_spec):
+def _creative_media_candidates(creative):
+    object_story_spec = creative.get("object_story_spec") or {}
+    image_hashes = set(_object_story_image_hashes(object_story_spec))
+    candidates = [
+        ("thumbnail_url", creative.get("thumbnail_url", "")),
+        ("image_url", creative.get("image_url", "")),
+        ("video_data.thumbnail_url", (object_story_spec.get("video_data") or {}).get("thumbnail_url", "")),
+        ("video_data.image_url", (object_story_spec.get("video_data") or {}).get("image_url", "")),
+    ]
     link_data = object_story_spec.get("link_data") or {}
-    return link_data.get("image_hash", "")
+    for attachment in link_data.get("child_attachments") or []:
+        candidates.append(("child_attachments.image_url", attachment.get("image_url", "")))
+
+    for source, url in candidates:
+        if url:
+            return {
+                "thumbnail_url": url if "thumbnail" in source else "",
+                "image_url": "" if "thumbnail" in source else url,
+                "image_hashes": image_hashes,
+                "preview_reason": "media_found",
+                "creative_media_source": source,
+            }
+    return {
+        "thumbnail_url": "",
+        "image_url": "",
+        "image_hashes": image_hashes,
+        "preview_reason": "image_hash_pending" if image_hashes else "no_usable_media_returned",
+        "creative_media_source": "image_hash" if image_hashes else "",
+    }
+
+
+def _object_story_image_hashes(object_story_spec):
+    link_data = object_story_spec.get("link_data") or {}
+    image_hashes = []
+    if link_data.get("image_hash"):
+        image_hashes.append(link_data["image_hash"])
+    for attachment in link_data.get("child_attachments") or []:
+        image_hash = attachment.get("image_hash")
+        if image_hash:
+            image_hashes.append(image_hash)
+    return image_hashes
 
 
 def _fetch_ad_images(requests, access_token, ad_account_id, image_hashes, request_counts):
@@ -619,6 +674,8 @@ def _normalize_insight(row, creative_data=None):
         "image_url": creative.get("image_url", ""),
         "object_story_image_hash": creative.get("object_story_image_hash", ""),
         "creative_preview_url": creative.get("creative_preview_url", ""),
+        "preview_reason": creative.get("preview_reason", ""),
+        "creative_media_source": creative.get("creative_media_source", ""),
         "spend": spend,
         "impressions": _to_float(row.get("impressions")),
         "reach": _to_float(row.get("reach")),
@@ -750,6 +807,8 @@ def _normalized_columns():
         "image_url",
         "object_story_image_hash",
         "creative_preview_url",
+        "preview_reason",
+        "creative_media_source",
         "spend",
         "impressions",
         "reach",
