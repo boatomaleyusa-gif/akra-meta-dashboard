@@ -3,6 +3,51 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 
+def _dark_chart(fig):
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font={"color": "#f8fafc", "family": "Inter, Arial, sans-serif"},
+        title={"font": {"color": "#f8fafc", "size": 18}},
+        legend={
+            "bgcolor": "rgba(17,24,39,0.72)",
+            "bordercolor": "#334155",
+            "borderwidth": 1,
+            "font": {"color": "#cbd5e1"},
+        },
+        hoverlabel={
+            "bgcolor": "#111827",
+            "bordercolor": "#334155",
+            "font": {"color": "#f8fafc"},
+        },
+        colorway=[
+            "#22d3ee",
+            "#60a5fa",
+            "#34d399",
+            "#fb923c",
+            "#a78bfa",
+            "#f472b6",
+            "#f87171",
+            "#cbd5e1",
+        ],
+    )
+    fig.update_xaxes(
+        gridcolor="rgba(51,65,85,0.45)",
+        zerolinecolor="rgba(51,65,85,0.65)",
+        linecolor="#334155",
+        tickfont={"color": "#94a3b8"},
+        title_font={"color": "#cbd5e1"},
+    )
+    fig.update_yaxes(
+        gridcolor="rgba(51,65,85,0.45)",
+        zerolinecolor="rgba(51,65,85,0.65)",
+        linecolor="#334155",
+        tickfont={"color": "#94a3b8"},
+        title_font={"color": "#cbd5e1"},
+    )
+    return fig
+
+
 def spend_vs_results_by_day(daily_df):
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_trace(
@@ -21,7 +66,7 @@ def spend_vs_results_by_day(daily_df):
     fig.update_layout(title="Spend vs Results by Day", hovermode="x unified")
     fig.update_yaxes(title_text="Spend (฿)", secondary_y=False)
     fig.update_yaxes(title_text="Results", secondary_y=True)
-    return fig
+    return _dark_chart(fig)
 
 
 def cost_per_result_trend(daily_df):
@@ -33,7 +78,7 @@ def cost_per_result_trend(daily_df):
         title="Cost per Result Trend",
     )
     fig.update_yaxes(title="Cost per Result (฿)")
-    return fig
+    return _dark_chart(fig)
 
 
 def leads_and_inbox_trend(daily_df):
@@ -45,7 +90,7 @@ def leads_and_inbox_trend(daily_df):
         title="Leads and Inbox Messages Trend",
     )
     fig.update_yaxes(title="Count")
-    return fig
+    return _dark_chart(fig)
 
 
 def campaign_comparison(campaign_df):
@@ -58,7 +103,7 @@ def campaign_comparison(campaign_df):
     )
     fig.update_xaxes(title="Campaign")
     fig.update_yaxes(title="Count")
-    return fig
+    return _dark_chart(fig)
 
 
 def frequency_vs_ctr(campaign_df):
@@ -72,7 +117,7 @@ def frequency_vs_ctr(campaign_df):
         title="Frequency vs CTR by Campaign",
     )
     fig.update_yaxes(title="CTR (%)")
-    return fig
+    return _dark_chart(fig)
 
 
 def top_creatives_by_leads(creative_df):
@@ -86,7 +131,7 @@ def top_creatives_by_leads(creative_df):
     )
     fig.update_xaxes(title="Creative")
     fig.update_yaxes(title="Leads")
-    return fig
+    return _dark_chart(fig)
 
 
 def top_creatives_by_inbox_messages(creative_df):
@@ -100,7 +145,7 @@ def top_creatives_by_inbox_messages(creative_df):
     )
     fig.update_xaxes(title="Creative")
     fig.update_yaxes(title="Inbox Messages")
-    return fig
+    return _dark_chart(fig)
 
 
 def cost_per_lead_by_creative(creative_df):
@@ -114,7 +159,7 @@ def cost_per_lead_by_creative(creative_df):
     )
     fig.update_xaxes(title="Creative")
     fig.update_yaxes(title="Cost per Lead (฿)")
-    return fig
+    return _dark_chart(fig)
 
 
 def creative_ctr_vs_frequency(creative_df):
@@ -129,4 +174,4 @@ def creative_ctr_vs_frequency(creative_df):
         title="CTR vs Frequency by Creative",
     )
     fig.update_yaxes(title="CTR (%)")
-    return fig
+    return _dark_chart(fig)

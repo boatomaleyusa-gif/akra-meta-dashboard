@@ -1,8 +1,12 @@
 ﻿from datetime import date, timedelta
 from datetime import datetime
 from html import escape
+import io
+import logging
 from pathlib import Path
+import re
 import sys
+import unicodedata
 
 import pandas as pd
 import plotly.express as px
@@ -31,6 +35,8 @@ from metrics import (
     safe_divide_value,
 )
 
+LOGGER = logging.getLogger(__name__)
+
 
 PRESETS = ["today", "yesterday", "last_7d", "last_14d", "last_30d"]
 PROJECT_NAMES = [
@@ -52,6 +58,7 @@ PROJECT_NAMES = [
     "OB-PM1",
     "TLC-KKL",
     "MC-CP",
+    "MC-PC",
 ]
 PROJECT_FILTER_OPTIONS = PROJECT_NAMES + ["Other"]
 PROJECT_MATCH_ORDER = sorted(PROJECT_NAMES, key=len, reverse=True)
@@ -83,6 +90,75 @@ SORT_COLUMNS = {
     "Frequency": "Frequency",
 }
 ASCENDING_SORTS = {"Cost per Result", "Cost per Inbox", "Cost per Lead", "CPM", "Frequency"}
+PIPELINE_PROJECT_COLUMN = "โครงการ"
+PIPELINE_REQUIRED_COLUMNS = [
+    PIPELINE_PROJECT_COLUMN,
+    "adset_name",
+    "channel",
+    "quality",
+    "stage",
+    "created_date",
+]
+PIPELINE_CONTACT_COLUMNS = ["total_contacts", "paid_contacts", "organic_contacts"]
+ORGANIC_BUCKET_NAME = "Organic / Engage"
+ORGANIC_RESULT_TYPE = "Engage"
+PIPELINE_ADSET_ABBREVIATIONS = {
+    "ib": "inbox",
+    "ld": "lead",
+    "eng": "engage",
+    "msg": "message",
+}
+ADSET_OBJECTIVE_ALIASES = {
+    "ib": "inbox",
+    "inbox": "inbox",
+    "inboxvdo": "inbox",
+    "inboxpic": "inbox",
+    "ld": "lead",
+    "lead": "lead",
+    "leadgen": "lead",
+    "leadpage": "lead",
+    "eng": "engage",
+    "engage": "engage",
+}
+PIPELINE_COLUMN_ALIASES = {
+    PIPELINE_PROJECT_COLUMN: [PIPELINE_PROJECT_COLUMN, "Project", "project"],
+    "adset_name": ["AD Set Name", "Adset Name", "Ad Set", "adset_name"],
+    "channel": ["ช่องทาง", "Channel", "channel"],
+    "quality": ["คุณภาพ", "Quality", "quality"],
+    "stage": ["สเตจ", "Stage", "stage"],
+    "created_date": ["วันที่สร้าง", "Created Date", "created_date"],
+}
+PIPELINE_TO_META_PROJECTS = {
+    "The Obsidian พุทธมณฑล สาย 1": "OB-PM1",
+    "The Obsidian": "OB-PM1",
+    "The Matias บรมราชชนนี - ทวีวัฒนา": "MT-BRTW",
+    "The Matt สาทร-ท่าพระ": "TM1,2-ST",
+    "The Matt Sathorn-Thaphra": "TM1,2-ST",
+    "The Miracle เศรษฐกิจ - พระราม 2": "M-SKR2",
+    "The Miracle เศรษฐกิจ - คลองครุ - พระราม2": "M-SKR2",
+    "The Miracle บางแสน สาย 2": "M-BSS2",
+    "The Miracle ประชาอุทิศ 90": "M-PC90",
+    "The Miracle กาญจนาภิเษก - เอกชัย": "M-KPEK",
+    "The Miracle กาญจนาภิเษก-เอกชัย โครงการ 2": "M-KPEK",
+    "The Miracle Plus พระราม2": "MP-R2",
+    "The miracle plus พระราม 2": "MP-R2",
+    "The Matias กาญจนาภิเษก - เพชรเกษม 69": "MT-KPP69",
+    "The Matias ราชพฤกษ์ - แจ้งวัฒนะ": "MT-RPCW",
+    "The Matt สุขุมวิท 101/1": "TM-SV101/1",
+    "The Matt Sukhumvit 101/1": "TM-SV101/1",
+    "The Mirth Lite ราชพฤกษ์ – พระราม 5": "TML-RPR5",
+    "The Mirth Lite ราชพฤกษ์ - พระราม 5": "TML-RPR5",
+    "The Mirth Lite เพชรเกษม 63": "TML-P63",
+    "The Miracle Plus เพชรเกษม 63 โครงการ 2": "TML-P63",
+    "The Miracle Plus เพชรเกษม 63 โครงการ 3": "TML-P63",
+    "Talaycation หัวหิน-ปราณบุรี": "TLC-KKL",
+    "ทะเลสาบขน": "TLC-KKL",
+    "The Miracle สุขุมวิท - แพรกษา": "M-SVPS",
+    "The Miracle ราชพฤกษ์ 346": "M-RP346",
+    "The Miracle Plus ราชบุรี": "MP-R",
+    "The Miracle ชุมแพ": "MC-PC",
+    "The Miracle Chumphae เดอะ มราเคล ชมแพ": "MC-PC",
+}
 STATE_ADS_DF = "ads_df"
 STATE_DATE_RANGE_LABEL = "date_range_label"
 STATE_SELECTED_PROJECTS = "selected_projects"
@@ -202,7 +278,9 @@ def _cached_meta_ads_data(
     return meta_df
 
 
-def _styles():
+def _styles(dark_theme=True):
+    if not dark_theme:
+        return
     st.markdown(
         """
         <style>
@@ -489,6 +567,282 @@ def _styles():
     )
 
 
+def _apply_plotly_dark_theme(fig):
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font={"color": "#f8fafc", "family": "Inter, Arial, sans-serif"},
+        title={"font": {"color": "#f8fafc", "size": 18}},
+        legend={
+            "bgcolor": "rgba(17,24,39,0.72)",
+            "bordercolor": "#334155",
+            "borderwidth": 1,
+            "font": {"color": "#cbd5e1"},
+        },
+        hoverlabel={
+            "bgcolor": "#111827",
+            "bordercolor": "#334155",
+            "font": {"color": "#f8fafc"},
+        },
+        colorway=[
+            "#22d3ee",
+            "#60a5fa",
+            "#34d399",
+            "#fb923c",
+            "#a78bfa",
+            "#f472b6",
+            "#f87171",
+            "#cbd5e1",
+        ],
+        margin={"l": 28, "r": 22, "t": 54, "b": 34},
+    )
+    fig.update_xaxes(
+        gridcolor="rgba(51,65,85,0.45)",
+        zerolinecolor="rgba(51,65,85,0.65)",
+        linecolor="#334155",
+        tickfont={"color": "#94a3b8"},
+        title_font={"color": "#cbd5e1"},
+    )
+    fig.update_yaxes(
+        gridcolor="rgba(51,65,85,0.45)",
+        zerolinecolor="rgba(51,65,85,0.65)",
+        linecolor="#334155",
+        tickfont={"color": "#94a3b8"},
+        title_font={"color": "#cbd5e1"},
+    )
+    return fig
+
+
+def _render_plotly_chart(container, fig):
+    container.plotly_chart(_apply_plotly_dark_theme(fig), use_container_width=True)
+    st.markdown(
+        """
+        <style>
+            :root {
+                --bg: #0f172a;
+                --panel: #111827;
+                --table: #1e293b;
+                --border: #334155;
+                --text: #f8fafc;
+                --muted: #94a3b8;
+                --cyan: #22d3ee;
+                --blue: #60a5fa;
+                --green: #34d399;
+                --orange: #fb923c;
+                --shadow: 0 20px 48px rgba(2, 6, 23, 0.36);
+            }
+            html, body, [data-testid="stAppViewContainer"] {
+                background: var(--bg) !important;
+                color: var(--text) !important;
+            }
+            .block-container {
+                padding-top: 1rem;
+                max-width: 1500px;
+            }
+            [data-testid="stSidebar"] {
+                background: #0b1120 !important;
+                border-right: 1px solid var(--border);
+            }
+            [data-testid="stSidebar"] * {
+                color: var(--text);
+            }
+            [data-testid="stSidebar"] h1,
+            [data-testid="stSidebar"] h2,
+            [data-testid="stSidebar"] h3 {
+                color: var(--text) !important;
+                font-weight: 850;
+            }
+            [data-testid="stSidebar"] label,
+            [data-testid="stSidebar"] p,
+            [data-testid="stSidebar"] span {
+                color: var(--muted);
+            }
+            [data-testid="stSidebar"] [data-baseweb="select"] > div,
+            [data-testid="stSidebar"] input,
+            [data-testid="stSidebar"] textarea {
+                background: #111827 !important;
+                border: 1px solid var(--border) !important;
+                border-radius: 8px !important;
+                color: var(--text) !important;
+            }
+            [data-testid="stFileUploader"] {
+                background: rgba(17, 24, 39, 0.86);
+                border: 1px dashed #475569;
+                border-radius: 8px;
+                padding: 10px;
+            }
+            div.stButton > button,
+            [data-testid="stDownloadButton"] button {
+                background: linear-gradient(135deg, #1d4ed8, #0891b2) !important;
+                border: 1px solid rgba(96, 165, 250, 0.5) !important;
+                border-radius: 8px !important;
+                color: #f8fafc !important;
+                font-weight: 800 !important;
+                box-shadow: 0 10px 26px rgba(14, 165, 233, 0.18);
+            }
+            .exec-header {
+                background:
+                    radial-gradient(circle at 12% 0%, rgba(34, 211, 238, 0.18), transparent 28%),
+                    linear-gradient(135deg, #0f172a 0%, #111827 58%, #0b1120 100%) !important;
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                box-shadow: var(--shadow);
+                color: var(--text);
+            }
+            .brand {
+                color: var(--cyan);
+                letter-spacing: 0.08em;
+            }
+            .subtitle, .date-range {
+                color: var(--muted);
+            }
+            .date-range {
+                background: rgba(30, 41, 59, 0.82);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+            }
+            .section-title {
+                color: var(--text) !important;
+                font-size: 20px;
+                font-weight: 850;
+                margin: 30px 0 12px;
+                padding-left: 12px;
+                border-left: 3px solid var(--cyan);
+            }
+            .card-grid {
+                gap: 16px;
+                margin-bottom: 14px;
+            }
+            .kpi-card, .decision-card, .note-card, .insight-group {
+                background: linear-gradient(180deg, rgba(17, 24, 39, 0.96), rgba(15, 23, 42, 0.96)) !important;
+                border: 1px solid var(--border) !important;
+                border-radius: 8px !important;
+                box-shadow: var(--shadow) !important;
+                color: var(--text) !important;
+            }
+            .kpi-card {
+                position: relative;
+                overflow: hidden;
+                min-height: 138px;
+            }
+            .kpi-card::before {
+                content: "";
+                position: absolute;
+                inset: 0 auto 0 0;
+                width: 3px;
+                background: var(--blue);
+            }
+            .kpi-card.accent-leads::before { background: var(--cyan); }
+            .kpi-card.accent-inbox::before { background: var(--blue); }
+            .kpi-card.accent-contacts::before { background: var(--green); }
+            .kpi-card.accent-cpl::before { background: var(--orange); }
+            .kpi-card.highlight {
+                border-color: rgba(34, 211, 238, 0.6) !important;
+                background: linear-gradient(180deg, rgba(8, 47, 73, 0.8), rgba(17, 24, 39, 0.96)) !important;
+            }
+            .kpi-card.muted {
+                opacity: 0.56;
+                background: #111827 !important;
+            }
+            .kpi-topline {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 10px;
+            }
+            .kpi-icon {
+                width: 34px;
+                height: 34px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 8px;
+                background: rgba(30, 41, 59, 0.9);
+                color: var(--cyan);
+                font-size: 17px;
+                border: 1px solid var(--border);
+            }
+            .kpi-group, .kpi-label, .decision-label, .decision-detail, .insight-copy, .creative-campaign, .row-label {
+                color: var(--muted) !important;
+            }
+            .kpi-value, .decision-value, .insight-heading, .insight-name, .creative-title, .creative-title a, .row-value {
+                color: var(--text) !important;
+            }
+            .kpi-value {
+                font-size: 30px;
+                letter-spacing: 0;
+            }
+            .badge-good { background: rgba(16, 185, 129, 0.16); color: var(--green); }
+            .badge-watch { background: rgba(251, 146, 60, 0.16); color: var(--orange); }
+            .badge-risk { background: rgba(248, 113, 113, 0.16); color: #f87171; }
+            .badge-action { background: rgba(96, 165, 250, 0.16); color: var(--blue); }
+            .note-card {
+                border-left: 4px solid var(--blue) !important;
+            }
+            .note-card.warning { border-left-color: var(--orange) !important; }
+            .note-card.risk { border-left-color: #f87171 !important; }
+            .note-card.ok { border-left-color: var(--green) !important; }
+            div[data-testid="stDataFrame"] {
+                background: var(--table);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                box-shadow: var(--shadow);
+            }
+            [data-testid="stPlotlyChart"] {
+                background: linear-gradient(180deg, rgba(17, 24, 39, 0.96), rgba(15, 23, 42, 0.96));
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                box-shadow: var(--shadow);
+                padding: 12px;
+            }
+            div[data-testid="stDataFrame"] div[role="grid"] {
+                color: var(--text) !important;
+            }
+            div[data-testid="stDataFrame"] [role="columnheader"] {
+                background: #0f172a !important;
+                color: var(--text) !important;
+                border-bottom: 1px solid var(--border) !important;
+                position: sticky;
+                top: 0;
+                z-index: 2;
+            }
+            div[data-testid="stDataFrame"] [role="row"]:nth-child(even) {
+                background: rgba(15, 23, 42, 0.48) !important;
+            }
+            div[data-testid="stDataFrame"] [role="row"]:hover {
+                background: rgba(34, 211, 238, 0.08) !important;
+            }
+            .creative-row {
+                background: linear-gradient(180deg, rgba(17, 24, 39, 0.98), rgba(15, 23, 42, 0.98)) !important;
+                border-color: var(--border) !important;
+                border-radius: 8px !important;
+                box-shadow: 0 12px 32px rgba(2, 6, 23, 0.26) !important;
+            }
+            .creative-row:hover {
+                border-color: rgba(34, 211, 238, 0.5) !important;
+                box-shadow: 0 18px 42px rgba(14, 165, 233, 0.14) !important;
+            }
+            .no-preview {
+                background: #1e293b !important;
+                color: var(--muted) !important;
+                border: 1px solid var(--border);
+                border-radius: 8px !important;
+            }
+            [data-testid="stAlert"] {
+                background: #111827;
+                color: var(--text);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+            }
+            h1, h2, h3, h4, h5, h6, p, span, label {
+                color: inherit;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _load_dashboard_data(use_custom_range, date_from, date_to, preset, raise_rate_limit=False):
     live_error = None
     try:
@@ -573,6 +927,1442 @@ def _load_dashboard_data(use_custom_range, date_from, date_to, preset, raise_rat
     if data_source_warning:
         meta_df.attrs["data_source_warning"] = data_source_warning
     return meta_df
+
+
+def _load_pipeline_upload(uploaded_file):
+    if uploaded_file is None:
+        return pd.DataFrame()
+    file_name = getattr(uploaded_file, "name", "")
+    extension = Path(file_name).suffix.lower()
+    if extension not in {".csv", ".xlsx", ".xls"}:
+        st.sidebar.warning(
+            "Sale Pipeline upload must be a .csv, .xlsx, or .xls file."
+        )
+        return pd.DataFrame()
+
+    file_bytes = uploaded_file.getvalue()
+    legacy_html_export = False
+    try:
+        if extension == ".csv":
+            pipeline_df = pd.read_csv(io.BytesIO(file_bytes))
+        elif extension == ".xls":
+            try:
+                pipeline_df = pd.read_excel(io.BytesIO(file_bytes), engine="xlrd")
+            except Exception as excel_error:
+                pipeline_df = _read_legacy_html_excel_export(file_bytes, excel_error)
+                legacy_html_export = True
+        else:
+            pipeline_df = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
+    except Exception as error:
+        st.sidebar.warning(
+            f"Sale Pipeline {extension} file could not be parsed. "
+            f"Check that it is a valid {extension} file and includes the expected columns. "
+            f"Details: {error}"
+        )
+        return pd.DataFrame()
+
+    pipeline_df.columns = [str(column).strip() for column in pipeline_df.columns]
+    pipeline_df = _rename_pipeline_columns(pipeline_df)
+    missing_columns = [
+        column for column in PIPELINE_REQUIRED_COLUMNS if column not in pipeline_df.columns
+    ]
+    if missing_columns:
+        detected_columns = ", ".join(str(column) for column in pipeline_df.columns)
+        st.sidebar.warning(
+            "Sale Pipeline file missing required columns: "
+            + ", ".join(missing_columns)
+            + f". Detected columns: {detected_columns}"
+        )
+        return pd.DataFrame()
+
+    pipeline_df = pipeline_df[PIPELINE_REQUIRED_COLUMNS].copy()
+    pipeline_df["created_date_raw"] = pipeline_df["created_date"]
+    pipeline_df["created_date"] = _parse_pipeline_created_dates(pipeline_df["created_date"])
+    pipeline_df["pipeline_project"] = pipeline_df[PIPELINE_PROJECT_COLUMN].apply(
+        _normalize_pipeline_project_name
+    )
+    pipeline_df["pipeline_project_key"] = pipeline_df["pipeline_project"].apply(
+        _normalize_pipeline_project_key
+    )
+    pipeline_df["is_organic"] = pipeline_df.apply(_is_organic_pipeline_row, axis=1)
+    pipeline_df["pipeline_bucket"] = pipeline_df["is_organic"].apply(
+        lambda is_organic: ORGANIC_BUCKET_NAME if is_organic else ""
+    )
+    pipeline_df["pipeline_result_type"] = pipeline_df["is_organic"].apply(
+        lambda is_organic: ORGANIC_RESULT_TYPE if is_organic else ""
+    )
+    pipeline_df["adset_key"] = pipeline_df["adset_name"].apply(
+        _normalize_pipeline_adset_key
+    )
+    if legacy_html_export:
+        st.sidebar.info("Loaded legacy HTML Excel export")
+    return pipeline_df
+
+
+def _is_organic_pipeline_row(row):
+    channel_text = _normalize_organic_detection_text(row.get("channel", ""))
+    adset_text = _normalize_organic_detection_text(row.get("adset_name", ""))
+    return (
+        "organic" in channel_text
+        or adset_text in {"", "-"}
+        or "organic" in adset_text
+    )
+
+
+def _normalize_organic_detection_text(value):
+    if pd.isna(value):
+        return ""
+    text = unicodedata.normalize("NFKC", str(value))
+    text = text.replace("\u00a0", " ")
+    text = text.translate(
+        str.maketrans(
+            {
+                "\u2010": "-",
+                "\u2011": "-",
+                "\u2012": "-",
+                "\u2013": "-",
+                "\u2014": "-",
+                "\u2212": "-",
+                "\ufe58": "-",
+                "\ufe63": "-",
+                "\uff0d": "-",
+            }
+        )
+    )
+    return re.sub(r"\s+", " ", text.strip()).casefold()
+
+
+def _read_legacy_html_excel_export(file_bytes, excel_error):
+    html_bytes = file_bytes.lstrip(b"\xef\xbb\xbf").lstrip()
+    lower_html = html_bytes[:512].lower()
+    looks_like_html = (
+        lower_html.startswith(b"<html")
+        or lower_html.startswith(b"<!doctype html")
+        or b"<table" in file_bytes.lower()
+    )
+    if not looks_like_html:
+        raise excel_error
+
+    tables = pd.read_html(io.BytesIO(file_bytes))
+    if not tables:
+        raise ValueError("No HTML tables found in legacy Excel export.") from excel_error
+    return tables[0]
+
+
+def _normalize_pipeline_project_name(value):
+    if pd.isna(value):
+        return ""
+    return " ".join(str(value).split())
+
+
+def _normalize_pipeline_project_key(value):
+    if pd.isna(value):
+        return ""
+    text = unicodedata.normalize("NFKC", str(value))
+    text = text.replace("\u00a0", " ")
+    text = text.translate(
+        str.maketrans(
+            {
+                "\u2010": "-",
+                "\u2011": "-",
+                "\u2012": "-",
+                "\u2013": "-",
+                "\u2014": "-",
+                "\u2212": "-",
+                "\ufe58": "-",
+                "\ufe63": "-",
+                "\uff0d": "-",
+                "\u2018": "'",
+                "\u2019": "'",
+                "\u201c": '"',
+                "\u201d": '"',
+                "\uff0c": ",",
+                "\u3001": ",",
+                "\uff0f": "/",
+            }
+        )
+    )
+    text = re.sub(r"\s+", " ", text.strip())
+    text = re.sub(r"\s*-\s*", "-", text)
+    text = re.sub(r"\s*/\s*", "/", text)
+    return text.casefold()
+
+
+def _normalize_match_key(value):
+    return _normalize_meta_adset_key(value)
+
+
+def _normalize_meta_adset_key(value):
+    return extract_core_adset_key(value)
+
+
+def _normalize_pipeline_adset_key(value):
+    return extract_core_adset_key(value)
+
+
+def extract_core_adset_key(name):
+    normalized = _normalize_adset_name(name)
+    if not normalized:
+        return ""
+
+    tokens = _expand_concatenated_adset_tokens(normalized.split())
+    objective_index = None
+    objective_token = ""
+    for index, token in enumerate(tokens):
+        objective_token = ADSET_OBJECTIVE_ALIASES.get(token, "")
+        if objective_token:
+            objective_index = index
+            break
+    if objective_index is None or objective_index == 0:
+        return ""
+
+    group_index = None
+    group_token = ""
+    for index in range(objective_index + 1, len(tokens)):
+        group_match = re.fullmatch(r"g\s*(\d+)", tokens[index])
+        if group_match:
+            group_index = index
+            group_token = f"g{group_match.group(1)}"
+            break
+    if group_index is None:
+        return ""
+
+    project_tokens = tokens[:objective_index]
+    core_tokens = [*project_tokens, objective_token, group_token]
+    return " ".join(core_tokens)
+
+
+def extract_core_adset_creative_type(name):
+    normalized = _normalize_adset_name(name)
+    if not normalized:
+        return ""
+
+    tokens = _expand_concatenated_adset_tokens(normalized.split())
+    for index, token in enumerate(tokens):
+        if not re.fullmatch(r"g\s*\d+", token):
+            continue
+        creative_index = index + 1
+        if creative_index < len(tokens) and tokens[creative_index] in {"vdo", "pic"}:
+            return tokens[creative_index]
+        return ""
+    return ""
+
+
+def _expand_concatenated_adset_tokens(tokens):
+    expanded_tokens = []
+    for token in tokens:
+        match = re.fullmatch(
+            r"(lead|leadgen|leadpage|inbox|inboxvdo|inboxpic)g(\d+)",
+            token,
+        )
+        if match:
+            objective = ADSET_OBJECTIVE_ALIASES.get(match.group(1), match.group(1))
+            expanded_tokens.extend([objective, f"g{match.group(2)}"])
+            continue
+        expanded_tokens.append(token)
+    return expanded_tokens
+
+
+def _normalize_adset_name(value, expand_pipeline_abbreviations=False):
+    if pd.isna(value):
+        return ""
+    text = unicodedata.normalize("NFKC", str(value))
+    text = text.replace("\u00a0", " ")
+    text = text.translate(
+        str.maketrans(
+            {
+                "\u2010": "-",
+                "\u2011": "-",
+                "\u2012": "-",
+                "\u2013": "-",
+                "\u2014": "-",
+                "\u2212": "-",
+                "\ufe58": "-",
+                "\ufe63": "-",
+                "\uff0d": "-",
+                "\uff0f": "/",
+            }
+        )
+    )
+    text = re.sub(r"[_\->/]+", " ", text.casefold())
+    text = re.sub(r"\s+", " ", text.strip())
+    if expand_pipeline_abbreviations:
+        text = " ".join(
+            PIPELINE_ADSET_ABBREVIATIONS.get(token, token)
+            for token in text.split()
+        )
+    return re.sub(r"\s+", " ", text.strip())
+
+
+def _remove_safe_adset_date_suffixes(text):
+    previous_text = None
+    while previous_text != text:
+        previous_text = text
+        text = re.sub(r"\s+\d{6}\s*$", "", text)
+        text = re.sub(r"\s+\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s*$", "", text)
+        text = re.sub(r"\s+\d{4}[/-]\d{1,2}[/-]\d{1,2}\s*$", "", text)
+    return text
+
+
+def _adset_token_key(value):
+    normalized = _normalize_meta_adset_key(value)
+    signature = _adset_match_signature(normalized)
+    if not signature["project"] or not signature["objective"] or not signature["group"]:
+        return ""
+    return "|".join(
+        [
+            signature["project"],
+            signature["objective"],
+            signature["group"],
+            signature["creative"] or "any",
+        ]
+    )
+
+
+def _adset_match_signature(normalized_text):
+    tokens = normalized_text.split()
+    return {
+        "project": _extract_adset_project_key(normalized_text),
+        "objective": _extract_adset_objective_token(tokens),
+        "group": _extract_adset_group_token(normalized_text),
+        "creative": _extract_adset_creative_token(tokens),
+    }
+
+
+def _adset_base_token_key_from_signature(signature):
+    if not signature["project"] or not signature["objective"] or not signature["group"]:
+        return ""
+    return "|".join([signature["project"], signature["objective"], signature["group"]])
+
+
+def _adset_tokens_compatible(meta_signature, pipeline_signature):
+    if _adset_base_token_key_from_signature(meta_signature) != _adset_base_token_key_from_signature(
+        pipeline_signature
+    ):
+        return False
+    meta_creative = meta_signature["creative"]
+    pipeline_creative = pipeline_signature["creative"]
+    return not meta_creative or not pipeline_creative or meta_creative == pipeline_creative
+
+
+def _extract_adset_group_token(normalized_text):
+    group_match = re.search(r"\bg\s*(\d+)\b", normalized_text)
+    if not group_match:
+        return ""
+    return f"g{group_match.group(1)}"
+
+
+def _extract_adset_objective_token(tokens):
+    token_set = set(tokens)
+    if token_set & {"inbox", "message", "messages", "messaging"}:
+        return "inbox"
+    if token_set & {"lead", "leads", "leadgen", "leadpage"}:
+        return "lead"
+    if token_set & {"engage", "engagement"}:
+        return "engage"
+    return ""
+
+
+def _extract_adset_creative_token(tokens):
+    token_set = set(tokens)
+    if "vdo" in token_set:
+        return "vdo"
+    if "pic" in token_set:
+        return "pic"
+    return ""
+
+
+def _legacy_adset_token_key(value):
+    normalized = _normalize_meta_adset_key(value)
+    if not normalized:
+        return ""
+    project_key = _extract_adset_project_key(normalized)
+    group_match = re.search(r"\bg\s*(\d+)\b", normalized)
+    if not project_key or not group_match:
+        return ""
+    media_key = _extract_adset_media_key(normalized)
+    return "|".join([project_key, group_match.group(1), media_key])
+
+
+def _adset_fallback_key(value):
+    return _adset_token_key(value)
+
+
+def _extract_adset_project_key(normalized_text):
+    compact_text = re.sub(r"[^0-9a-z]+", "", normalized_text)
+    aliases = {
+        "tmst": "tm12st",
+        "tm12st": "tm12st",
+        "tmsv1011": "tmsv1011",
+        "tm-sv101-1": "tmsv1011",
+    }
+    for alias, project_key in aliases.items():
+        if re.sub(r"[^0-9a-z]+", "", alias) in compact_text:
+            return project_key
+    for project_name in PROJECT_MATCH_ORDER:
+        project_key = re.sub(r"[^0-9a-z]+", "", project_name.casefold())
+        if project_key and project_key in compact_text:
+            return project_key
+    return ""
+
+
+def _extract_adset_media_key(normalized_text):
+    if re.search(
+        r"\b(?:ib|inbox|inboxvdo|inboxpic|inboxpage|inbox vdo|inbox pic|inbox page)\b",
+        normalized_text,
+    ):
+        return "inbox"
+    if re.search(r"\b(?:lead|leadpage|leadgen|lead page)\b", normalized_text):
+        return "lead"
+    return "any"
+
+
+def _parse_pipeline_created_dates(values):
+    return values.apply(_parse_pipeline_created_date)
+
+
+def _parse_pipeline_created_date(value):
+    if pd.isna(value):
+        return pd.NaT
+
+    if isinstance(value, (datetime, date)):
+        return pd.to_datetime(value, errors="coerce")
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if 20000 <= float(value) <= 80000:
+            return pd.to_datetime(value, unit="D", origin="1899-12-30", errors="coerce")
+        return pd.to_datetime(value, errors="coerce", dayfirst=True)
+
+    date_text = _normalize_pipeline_date_text(value)
+    return pd.to_datetime(date_text, errors="coerce", dayfirst=True)
+
+
+def _normalize_pipeline_date_text(value):
+    text = unicodedata.normalize("NFKC", str(value))
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text.replace("\u00a0", " ").strip())
+
+    thai_months = {
+        "มกราคม": "01",
+        "ม.ค.": "01",
+        "มค": "01",
+        "กุมภาพันธ์": "02",
+        "ก.พ.": "02",
+        "กพ": "02",
+        "มีนาคม": "03",
+        "มี.ค.": "03",
+        "มีค": "03",
+        "เมษายน": "04",
+        "เม.ย.": "04",
+        "เมย": "04",
+        "พฤษภาคม": "05",
+        "พ.ค.": "05",
+        "พค": "05",
+        "มิถุนายน": "06",
+        "มิ.ย.": "06",
+        "มิย": "06",
+        "กรกฎาคม": "07",
+        "ก.ค.": "07",
+        "กค": "07",
+        "สิงหาคม": "08",
+        "ส.ค.": "08",
+        "สค": "08",
+        "กันยายน": "09",
+        "ก.ย.": "09",
+        "กย": "09",
+        "ตุลาคม": "10",
+        "ต.ค.": "10",
+        "ตค": "10",
+        "พฤศจิกายน": "11",
+        "พ.ย.": "11",
+        "พย": "11",
+        "ธันวาคม": "12",
+        "ธ.ค.": "12",
+        "ธค": "12",
+    }
+    for thai_month, month_number in thai_months.items():
+        text = text.replace(thai_month, month_number)
+
+    text = re.sub(
+        r"\b(25\d{2})\b",
+        lambda match: str(int(match.group(1)) - 543),
+        text,
+    )
+    return text
+
+
+def _filter_pipeline_by_date_range(pipeline_df, date_from, date_to):
+    if pipeline_df.empty:
+        return pipeline_df.copy()
+
+    filtered_df = pipeline_df.copy()
+    parsed_dates = filtered_df["created_date"]
+    unparsed_count = int(parsed_dates.isna().sum())
+    if unparsed_count:
+        st.sidebar.warning(
+            f"Sale Pipeline rows with unparsed created_date excluded: {unparsed_count:,}"
+        )
+
+    start_date = pd.Timestamp(date_from)
+    end_date = pd.Timestamp(date_to) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+    filtered_df = filtered_df[
+        parsed_dates.notna()
+        & (parsed_dates >= start_date)
+        & (parsed_dates <= end_date)
+    ].copy()
+    st.sidebar.caption(f"Pipeline rows uploaded: {len(pipeline_df):,}")
+    st.sidebar.caption(f"Pipeline rows in selected date range: {len(filtered_df):,}")
+    return filtered_df
+
+
+def _rename_pipeline_columns(pipeline_df):
+    rename_map = {}
+    existing_columns = set(pipeline_df.columns)
+    for canonical_column, aliases in PIPELINE_COLUMN_ALIASES.items():
+        for alias in aliases:
+            alias = alias.strip()
+            if alias in existing_columns:
+                rename_map[alias] = canonical_column
+                break
+    return pipeline_df.rename(columns=rename_map)
+
+
+def _pipeline_project_summary(pipeline_df):
+    if pipeline_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "pipeline_project",
+                "pipeline_project_key",
+                *PIPELINE_CONTACT_COLUMNS,
+            ]
+        )
+
+    summary_df = pipeline_df.copy()
+    if "is_organic" not in summary_df.columns:
+        summary_df["is_organic"] = False
+    summary_df["is_organic"] = summary_df["is_organic"].fillna(False).astype(bool)
+    summary_df["paid_contact"] = (~summary_df["is_organic"]).astype(int)
+    summary_df["organic_contact"] = summary_df["is_organic"].astype(int)
+
+    return (
+        summary_df.groupby(["pipeline_project", "pipeline_project_key"], as_index=False)
+        .agg(
+            total_contacts=("pipeline_project", "size"),
+            paid_contacts=("paid_contact", "sum"),
+            organic_contacts=("organic_contact", "sum"),
+        )
+    )
+
+
+def _pipeline_adset_summary(pipeline_df):
+    if pipeline_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "adset_name",
+                "adset_key",
+                "normalized_pipeline_key",
+                "pipeline_created_date",
+                "pipeline_creative_type",
+                "total_contacts",
+            ]
+        )
+
+    summary_df = pipeline_df.copy()
+    if "is_organic" in summary_df.columns:
+        summary_df = summary_df[~summary_df["is_organic"].fillna(False).astype(bool)]
+    summary_df["adset_name"] = summary_df["adset_name"].fillna("").astype(str).str.strip()
+    summary_df = summary_df[summary_df["adset_key"] != ""]
+    summary_df["pipeline_created_date"] = pd.to_datetime(
+        summary_df["created_date"], errors="coerce"
+    ).dt.date
+    summary_df["pipeline_creative_type"] = summary_df["adset_name"].apply(
+        extract_core_adset_creative_type
+    )
+    if summary_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "adset_name",
+                "adset_key",
+                "normalized_pipeline_key",
+                "pipeline_created_date",
+                "pipeline_creative_type",
+                "total_contacts",
+            ]
+        )
+
+    return (
+        summary_df.groupby(
+            ["adset_key", "pipeline_created_date", "pipeline_creative_type"],
+            as_index=False,
+            dropna=False,
+        )
+        .agg(
+            adset_name=("adset_name", "first"),
+            normalized_pipeline_key=("adset_key", "first"),
+            total_contacts=("adset_key", "size"),
+        )
+    )
+
+
+def _join_pipeline_project_data(project_df, pipeline_project_df):
+    contact_columns = PIPELINE_CONTACT_COLUMNS
+    if pipeline_project_df.empty:
+        joined_df = project_df.copy()
+        for column in contact_columns:
+            joined_df[column] = 0
+        return _ensure_project_contact_metrics(joined_df)
+
+    mapped_pipeline_df = _mapped_pipeline_projects(pipeline_project_df)
+    mapped_project_df = (
+        mapped_pipeline_df.groupby("project", as_index=False)[contact_columns].sum()
+    )
+
+    joined_df = project_df.merge(mapped_project_df, on="project", how="left")
+    for column in contact_columns:
+        joined_df[column] = joined_df[column].fillna(0).astype(int)
+    return _ensure_project_contact_metrics(joined_df)
+
+
+def _ensure_project_contact_metrics(project_df):
+    project_df = project_df.copy()
+    has_total_contacts = "total_contacts" in project_df.columns
+    has_paid_contacts = "paid_contacts" in project_df.columns
+    has_organic_contacts = "organic_contacts" in project_df.columns
+    if has_total_contacts and not has_paid_contacts and not has_organic_contacts:
+        project_df["paid_contacts"] = project_df["total_contacts"]
+        project_df["organic_contacts"] = 0
+    for column in PIPELINE_CONTACT_COLUMNS:
+        if column not in project_df.columns:
+            project_df[column] = 0
+        project_df[column] = (
+            pd.to_numeric(project_df[column], errors="coerce")
+            .fillna(0)
+            .astype(int)
+        )
+    project_df["total_contacts"] = (
+        project_df["paid_contacts"] + project_df["organic_contacts"]
+    ).astype(int)
+    project_df["cost_per_contact"] = project_df.apply(
+        lambda row: pd.NA
+        if row["total_contacts"] == 0
+        else _safe_divide(row["spend"], row["total_contacts"]),
+        axis=1,
+    )
+    return project_df
+
+
+def _join_pipeline_adset_data(adset_df, pipeline_adset_df):
+    adset_df = adset_df.copy()
+    adset_df = adset_df.drop(
+        columns=[
+            "total_contacts",
+            "cost_per_contact",
+            "normalized_meta_key",
+            "normalized_pipeline_key",
+            "meta_creative_type",
+            "pipeline_creative_type",
+            "contact_join_key",
+            "pipeline_contact_count",
+            "duplicated_contact_flag",
+            "match_status",
+        ],
+        errors="ignore",
+    )
+    if "adset" not in adset_df.columns:
+        adset_df["adset"] = ""
+    adset_df["adset_key"] = adset_df["adset"].apply(_normalize_meta_adset_key)
+    adset_df["normalized_meta_key"] = adset_df["adset_key"]
+    adset_df["meta_creative_type"] = adset_df["adset"].apply(
+        extract_core_adset_creative_type
+    )
+
+    if pipeline_adset_df.empty:
+        adset_df["total_contacts"] = 0
+        adset_df["normalized_pipeline_key"] = ""
+        adset_df["pipeline_creative_type"] = ""
+        adset_df["contact_join_key"] = adset_df["adset_key"]
+        adset_df["pipeline_contact_count"] = 0
+        adset_df["duplicated_contact_flag"] = False
+        adset_df["match_status"] = "no_match"
+        joined_df = _ensure_adset_contact_metrics(adset_df).drop(
+            columns=["adset_key"], errors="ignore"
+        )
+        joined_df.attrs["pipeline_adset_match_details"] = _empty_adset_match_details()
+        return joined_df
+
+    match_df, match_details = _match_pipeline_adsets(adset_df, pipeline_adset_df)
+    joined_df = adset_df.merge(match_df, on="adset_key", how="left")
+    joined_df["normalized_pipeline_key"] = joined_df["normalized_pipeline_key"].fillna("")
+    joined_df["pipeline_creative_type"] = joined_df["pipeline_creative_type"].fillna("")
+    joined_df["contact_join_key"] = joined_df["contact_join_key"].fillna(
+        joined_df["adset_key"]
+    )
+    joined_df["pipeline_contact_count"] = (
+        pd.to_numeric(joined_df["pipeline_contact_count"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+    joined_df["match_status"] = joined_df["match_status"].fillna("no_match")
+    joined_df = _allocate_adset_contacts(joined_df)
+    joined_df = _ensure_adset_contact_metrics(joined_df).drop(
+        columns=["adset_key"], errors="ignore"
+    )
+    joined_df.attrs["pipeline_adset_match_details"] = match_details
+    return joined_df
+
+
+def _join_adset_contacts_to_campaign(campaign_df, adset_df):
+    campaign_df = campaign_df.copy()
+    if adset_df.empty or "total_contacts" not in adset_df.columns:
+        campaign_df["total_contacts"] = 0
+        campaign_df["cost_per_contact"] = pd.NA
+        return campaign_df
+
+    contact_df = adset_df.copy()
+    contact_df.loc[
+        ~contact_df["primary_result_type"].isin(["Lead", "Inbox"]),
+        "total_contacts",
+    ] = 0
+    contact_df["total_contacts"] = (
+        pd.to_numeric(contact_df["total_contacts"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+    contact_df = (
+        contact_df.groupby(
+            ["campaign", "project", "primary_result_type"],
+            as_index=False,
+        )
+        .agg(total_contacts=("total_contacts", "sum"))
+    )
+    campaign_df = campaign_df.merge(
+        contact_df,
+        on=["campaign", "project", "primary_result_type"],
+        how="left",
+    )
+    campaign_df["total_contacts"] = (
+        pd.to_numeric(campaign_df["total_contacts"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+    campaign_df["cost_per_contact"] = campaign_df.apply(
+        lambda row: pd.NA
+        if row["total_contacts"] <= 0
+        else _safe_divide(row["spend"], row["total_contacts"]),
+        axis=1,
+    )
+    return campaign_df
+
+
+def _clear_non_primary_adset_contacts(adset_df):
+    adset_df = adset_df.copy()
+    if "primary_result_type" not in adset_df.columns:
+        return _ensure_adset_contact_metrics(adset_df)
+
+    non_primary_rows = ~adset_df["primary_result_type"].isin(["Lead", "Inbox"])
+    if non_primary_rows.any():
+        adset_df.loc[non_primary_rows, "total_contacts"] = 0
+    return _ensure_adset_contact_metrics(adset_df)
+
+
+def _join_campaign_contacts_to_project(project_df, campaign_df):
+    project_df = project_df.copy()
+    if campaign_df.empty or "total_contacts" not in campaign_df.columns:
+        project_df["total_contacts"] = 0
+        project_df["cost_per_contact"] = pd.NA
+        return _ensure_project_contact_metrics(project_df)
+
+    contact_df = campaign_df.copy()
+    contact_df.loc[
+        ~contact_df["primary_result_type"].isin(["Lead", "Inbox"]),
+        "total_contacts",
+    ] = 0
+    contact_df["total_contacts"] = (
+        pd.to_numeric(contact_df["total_contacts"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+    contact_df = (
+        contact_df.groupby(["project", "primary_result_type"], as_index=False)
+        .agg(total_contacts=("total_contacts", "sum"))
+    )
+
+    project_df = project_df.drop(
+        columns=["total_contacts", "paid_contacts", "organic_contacts", "cost_per_contact"],
+        errors="ignore",
+    )
+    project_df = project_df.merge(
+        contact_df,
+        on=["project", "primary_result_type"],
+        how="left",
+    )
+    project_df["total_contacts"] = (
+        pd.to_numeric(project_df["total_contacts"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+    project_df = _ensure_project_contact_metrics(project_df)
+    _validate_project_campaign_contact_totals(project_df, campaign_df)
+    return project_df
+
+
+def _validate_project_campaign_contact_totals(project_df, campaign_df):
+    if project_df.empty or campaign_df.empty or "total_contacts" not in campaign_df.columns:
+        return
+
+    project_totals = (
+        project_df.groupby("project", as_index=False)
+        .agg(project_contacts=("total_contacts", "sum"))
+    )
+    campaign_totals = campaign_df.copy()
+    campaign_totals.loc[
+        ~campaign_totals["primary_result_type"].isin(["Lead", "Inbox"]),
+        "total_contacts",
+    ] = 0
+    campaign_totals["total_contacts"] = (
+        pd.to_numeric(campaign_totals["total_contacts"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+    campaign_totals = campaign_totals[
+        campaign_totals["project"].isin(project_totals["project"])
+    ]
+    campaign_totals = (
+        campaign_totals.groupby("project", as_index=False)
+        .agg(campaign_contacts=("total_contacts", "sum"))
+    )
+    validation_df = project_totals.merge(campaign_totals, on="project", how="outer").fillna(0)
+    mismatched_df = validation_df[
+        validation_df["project_contacts"].astype(int)
+        != validation_df["campaign_contacts"].astype(int)
+    ]
+    if mismatched_df.empty:
+        return
+
+    LOGGER.warning(
+        "Project contact totals do not match summed campaign contacts: %s",
+        mismatched_df.to_dict("records"),
+    )
+
+
+def _match_pipeline_adsets(meta_adset_df, pipeline_adset_df):
+    meta_unique_df = (
+        meta_adset_df[["adset", "adset_key", "normalized_meta_key", "meta_creative_type"]]
+        .drop_duplicates()
+        .query("adset_key != ''")
+        .copy()
+    )
+    if "normalized_pipeline_key" not in pipeline_adset_df.columns:
+        pipeline_adset_df = pipeline_adset_df.copy()
+        pipeline_adset_df["normalized_pipeline_key"] = pipeline_adset_df["adset_key"]
+    if "pipeline_creative_type" not in pipeline_adset_df.columns:
+        pipeline_adset_df = pipeline_adset_df.copy()
+        pipeline_adset_df["pipeline_creative_type"] = pipeline_adset_df[
+            "adset_name"
+        ].apply(extract_core_adset_creative_type)
+    if "pipeline_created_date" not in pipeline_adset_df.columns:
+        pipeline_adset_df = pipeline_adset_df.copy()
+        pipeline_adset_df["pipeline_created_date"] = pd.NaT
+    pipeline_unique_df = (
+        pipeline_adset_df[
+            [
+                "adset_name",
+                "adset_key",
+                "normalized_pipeline_key",
+                "pipeline_created_date",
+                "pipeline_creative_type",
+                "total_contacts",
+            ]
+        ]
+        .drop_duplicates()
+        .query("adset_key != ''")
+        .copy()
+    )
+
+    exact_df = meta_unique_df.merge(
+        pipeline_unique_df,
+        on="adset_key",
+        how="inner",
+    )
+    exact_df["pipeline_adset_key"] = exact_df["adset_key"]
+    exact_df["match_type"] = "exact normalized"
+    exact_df["match_status"] = "matched_exact"
+    exact_df["contact_join_key"] = exact_df["adset_key"]
+    exact_meta_keys = set(exact_df["adset_key"].tolist())
+    exact_pipeline_keys = set(exact_df["adset_key"].tolist())
+
+    token_df = pd.DataFrame()
+    ambiguous_token_df = pd.DataFrame()
+    matched_df = exact_df.copy()
+    matched_pipeline_pool_df = pipeline_unique_df[
+        pipeline_unique_df["adset_key"].isin(exact_meta_keys)
+    ].copy()
+    if matched_pipeline_pool_df.empty:
+        contact_df = pd.DataFrame(
+            columns=[
+                "adset_key",
+                "normalized_pipeline_key",
+                "pipeline_creative_type",
+                "contact_join_key",
+                "pipeline_contact_count",
+                "match_status",
+            ]
+        )
+    else:
+        contact_df = (
+            matched_pipeline_pool_df.groupby("adset_key", as_index=False)
+            .agg(
+                normalized_pipeline_key=(
+                    "normalized_pipeline_key",
+                    lambda values: " | ".join(
+                        sorted({str(value) for value in values if str(value).strip()})
+                    ),
+                ),
+                pipeline_creative_type=(
+                    "pipeline_creative_type",
+                    lambda values: " | ".join(
+                        sorted({str(value) for value in values if str(value).strip()})
+                    ),
+                ),
+                contact_join_key=("adset_key", "first"),
+                pipeline_contact_count=("total_contacts", "sum"),
+            )
+        )
+        contact_df["match_status"] = "matched_exact"
+    contact_df["pipeline_contact_count"] = pd.to_numeric(
+        contact_df["pipeline_contact_count"], errors="coerce"
+    ).fillna(0).astype(int)
+
+    matched_meta_keys = set(matched_df["adset_key"].tolist()) if not matched_df.empty else set()
+    matched_pipeline_keys = _split_matched_pipeline_keys(matched_df)
+    details = {
+        "exact": exact_df,
+        "token": token_df,
+        "fallback": token_df,
+        "ambiguous_token": ambiguous_token_df,
+        "unmatched_meta": meta_unique_df[
+            ~meta_unique_df["adset_key"].isin(matched_meta_keys)
+        ].copy(),
+        "unmatched_pipeline": pipeline_unique_df[
+            ~pipeline_unique_df["adset_key"].isin(matched_pipeline_keys | exact_pipeline_keys)
+        ].copy(),
+    }
+    return contact_df, details
+
+
+def _allocate_adset_contacts(joined_df):
+    joined_df = joined_df.copy()
+    joined_df["total_contacts"] = 0
+    joined_df["duplicated_contact_flag"] = False
+
+    if joined_df.empty or "contact_join_key" not in joined_df.columns:
+        return joined_df
+
+    for join_key, group in joined_df.groupby("contact_join_key", dropna=False):
+        if not str(join_key or "").strip():
+            continue
+        pipeline_contact_count = int(group["pipeline_contact_count"].max())
+        if pipeline_contact_count <= 0:
+            continue
+
+        row_count = len(group)
+        duplicated = row_count > 1
+        allocated = _allocate_contacts_by_spend(
+            pipeline_contact_count,
+            group["spend"],
+        )
+        joined_df.loc[group.index, "total_contacts"] = allocated
+        joined_df.loc[group.index, "duplicated_contact_flag"] = duplicated
+
+    joined_df["total_contacts"] = (
+        pd.to_numeric(joined_df["total_contacts"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+    joined_df["duplicated_contact_flag"] = joined_df[
+        "duplicated_contact_flag"
+    ].fillna(False).astype(bool)
+    return joined_df
+
+
+def _allocate_contacts_by_spend(total_contacts, spend_values):
+    spend = pd.to_numeric(spend_values, errors="coerce").fillna(0)
+    row_count = len(spend)
+    if row_count == 0:
+        return []
+    if row_count == 1:
+        return [int(total_contacts)]
+
+    total_spend = spend.sum()
+    if total_spend > 0:
+        quotas = spend / total_spend * int(total_contacts)
+    else:
+        quotas = pd.Series(
+            [int(total_contacts) / row_count] * row_count,
+            index=spend.index,
+        )
+
+    base_allocations = quotas.apply(lambda value: int(value))
+    remainder = int(total_contacts) - int(base_allocations.sum())
+    if remainder > 0:
+        fractional_order = (quotas - base_allocations).sort_values(
+            ascending=False,
+            kind="mergesort",
+        )
+        for index in fractional_order.index[:remainder]:
+            base_allocations.loc[index] += 1
+    return base_allocations.astype(int).tolist()
+
+
+def _split_matched_pipeline_keys(matched_df):
+    if matched_df.empty or "pipeline_adset_key" not in matched_df:
+        return set()
+    keys = set()
+    for value in matched_df["pipeline_adset_key"].dropna().astype(str):
+        keys.update(part.strip() for part in value.split(" | ") if part.strip())
+    return keys
+
+
+def _empty_adset_match_details():
+    return {
+        "exact": pd.DataFrame(),
+        "token": pd.DataFrame(),
+        "fallback": pd.DataFrame(),
+        "ambiguous_token": pd.DataFrame(),
+        "unmatched_meta": pd.DataFrame(),
+        "unmatched_pipeline": pd.DataFrame(),
+    }
+
+
+def _token_adset_matches(meta_df, pipeline_df):
+    columns = [
+        "adset",
+        "adset_key",
+        "normalized_meta_key",
+        "adset_name",
+        "pipeline_adset_key",
+        "normalized_pipeline_key",
+        "total_contacts",
+        "match_type",
+        "match_status",
+        "token_key",
+    ]
+    ambiguous_columns = [
+        "token_key",
+        "meta_adsets",
+        "pipeline_adsets",
+        "meta_count",
+        "pipeline_count",
+        "pipeline_contacts",
+    ]
+    if meta_df.empty or pipeline_df.empty:
+        return pd.DataFrame(columns=columns), pd.DataFrame(columns=ambiguous_columns)
+
+    meta_candidates = meta_df.copy()
+    pipeline_candidates = pipeline_df.copy()
+    meta_candidates["match_signature"] = meta_candidates["normalized_meta_key"].apply(
+        _adset_match_signature
+    )
+    pipeline_candidates["match_signature"] = pipeline_candidates[
+        "normalized_pipeline_key"
+    ].apply(_adset_match_signature)
+    meta_candidates["token_key"] = meta_candidates["match_signature"].apply(
+        _adset_base_token_key_from_signature
+    )
+    pipeline_candidates["token_key"] = pipeline_candidates["match_signature"].apply(
+        _adset_base_token_key_from_signature
+    )
+    meta_candidates = meta_candidates[meta_candidates["token_key"] != ""].copy()
+    pipeline_candidates = pipeline_candidates[pipeline_candidates["token_key"] != ""].copy()
+    if meta_candidates.empty or pipeline_candidates.empty:
+        return pd.DataFrame(columns=columns), pd.DataFrame(columns=ambiguous_columns)
+
+    accepted_rows = []
+    ambiguous_keys = set()
+    shared_keys = sorted(set(meta_candidates["token_key"]) & set(pipeline_candidates["token_key"]))
+    for token_key in shared_keys:
+        meta_group = meta_candidates[meta_candidates["token_key"] == token_key]
+        pipeline_group = pipeline_candidates[pipeline_candidates["token_key"] == token_key]
+        compatible_pairs = []
+        for meta_index, meta_row in meta_group.iterrows():
+            for pipeline_index, pipeline_row in pipeline_group.iterrows():
+                if _adset_tokens_compatible(
+                    meta_row["match_signature"], pipeline_row["match_signature"]
+                ):
+                    compatible_pairs.append((meta_index, pipeline_index))
+        if not compatible_pairs:
+            continue
+
+        meta_counts = {}
+        pipeline_counts = {}
+        for meta_index, pipeline_index in compatible_pairs:
+            meta_counts[meta_index] = meta_counts.get(meta_index, 0) + 1
+            pipeline_counts[pipeline_index] = pipeline_counts.get(pipeline_index, 0) + 1
+
+        accepted_pipeline_indexes = [
+            pipeline_index
+            for meta_index, pipeline_index in compatible_pairs
+            if pipeline_counts[pipeline_index] == 1
+        ]
+        if not accepted_pipeline_indexes:
+            ambiguous_keys.add(token_key)
+            continue
+        if any(pipeline_counts[pipeline_index] > 1 for _, pipeline_index in compatible_pairs):
+            ambiguous_keys.add(token_key)
+
+        accepted_pipeline_df = pipeline_group.loc[accepted_pipeline_indexes]
+        for meta_index, matched_pipeline_df in accepted_pipeline_df.groupby(
+            accepted_pipeline_df.index.map(
+                {
+                    pipeline_index: meta_index
+                    for meta_index, pipeline_index in compatible_pairs
+                    if pipeline_index in accepted_pipeline_indexes
+                }
+            )
+        ):
+            meta_row = meta_group.loc[meta_index]
+            accepted_rows.append(
+                {
+                    "adset": meta_row["adset"],
+                    "adset_key": meta_row["adset_key"],
+                    "normalized_meta_key": meta_row["normalized_meta_key"],
+                    "adset_name": " | ".join(matched_pipeline_df["adset_name"].astype(str)),
+                    "pipeline_adset_key": " | ".join(
+                        matched_pipeline_df["adset_key"].astype(str)
+                    ),
+                    "normalized_pipeline_key": " | ".join(
+                        matched_pipeline_df["normalized_pipeline_key"].astype(str)
+                    ),
+                    "total_contacts": int(matched_pipeline_df["total_contacts"].sum()),
+                    "match_type": "deterministic token key",
+                    "match_status": "matched_token",
+                    "token_key": token_key,
+                }
+            )
+
+    token_df = pd.DataFrame(accepted_rows, columns=columns)
+
+    ambiguous_rows = []
+    for token_key in sorted(ambiguous_keys):
+        meta_group = meta_candidates[meta_candidates["token_key"] == token_key]
+        pipeline_group = pipeline_candidates[pipeline_candidates["token_key"] == token_key]
+        ambiguous_rows.append(
+            {
+                "token_key": token_key,
+                "meta_adsets": " | ".join(meta_group["adset"].astype(str).tolist()),
+                "pipeline_adsets": " | ".join(pipeline_group["adset_name"].astype(str).tolist()),
+                "meta_count": len(meta_group),
+                "pipeline_count": len(pipeline_group),
+                "pipeline_contacts": int(pipeline_group["total_contacts"].sum()),
+            }
+        )
+    ambiguous_df = pd.DataFrame(ambiguous_rows, columns=ambiguous_columns)
+    return token_df[columns], ambiguous_df
+
+
+def _fallback_adset_matches(meta_df, pipeline_df):
+    token_df, _ = _token_adset_matches(meta_df, pipeline_df)
+    return token_df.drop(columns=["token_key"], errors="ignore")
+
+
+def _ensure_adset_contact_metrics(adset_df):
+    adset_df = adset_df.copy()
+    if "total_contacts" not in adset_df.columns:
+        adset_df["total_contacts"] = 0
+    adset_df["total_contacts"] = (
+        pd.to_numeric(adset_df["total_contacts"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+    adset_df["cost_per_contact"] = adset_df.apply(
+        lambda row: pd.NA
+        if row["total_contacts"] == 0
+        else _safe_divide(row["spend"], row["total_contacts"]),
+        axis=1,
+    )
+    return adset_df
+
+
+def _scalarize_display_value(value):
+    if isinstance(value, (pd.DataFrame, pd.Series, list, tuple, dict, set)):
+        return str(value)
+    return value
+
+
+def _scalarize_display_df(display_df):
+    display_df = display_df.copy()
+    display_df = display_df.loc[:, ~display_df.columns.duplicated()]
+    return display_df.map(_scalarize_display_value)
+
+
+def _display_series(df, column, default=None):
+    if column not in df.columns:
+        return pd.Series([default] * len(df), index=df.index)
+    values = df[column]
+    if isinstance(values, pd.DataFrame):
+        values = values.iloc[:, 0]
+    return values
+
+
+def _adset_display_df(adset_df):
+    source_columns = [
+        ("project", "Project"),
+        ("campaign", "Campaign"),
+        ("adset", "Ad Set"),
+        ("primary_result_type", "Primary Result Type"),
+        ("spend", "Spend"),
+        ("results", "Results"),
+        ("inbox_messages", "Inbox Messages"),
+        ("leads", "Leads"),
+        ("total_contacts", "Contacts"),
+        ("cost_per_contact", "Cost per Contact"),
+        ("cost_per_result", "Cost per Result"),
+        ("cost_per_inbox", "Cost per Inbox"),
+        ("cost_per_lead", "Cost per Lead"),
+        ("CTR", "CTR"),
+        ("CPM", "CPM"),
+        ("Frequency", "Frequency"),
+    ]
+    display_df = pd.DataFrame(index=adset_df.index)
+    for source_column, display_column in source_columns:
+        display_df[display_column] = _display_series(adset_df, source_column)
+
+    numeric_columns = [
+        "Spend",
+        "Results",
+        "Inbox Messages",
+        "Leads",
+        "Contacts",
+        "Cost per Contact",
+        "Cost per Result",
+        "Cost per Inbox",
+        "Cost per Lead",
+        "CTR",
+        "CPM",
+        "Frequency",
+    ]
+    for column in numeric_columns:
+        display_df[column] = pd.to_numeric(display_df[column], errors="coerce")
+
+    display_df["Contacts"] = display_df["Contacts"].fillna(0).astype(int)
+    display_df["Cost per Contact"] = display_df.apply(
+        lambda row: pd.NA
+        if row["Contacts"] <= 0
+        else _safe_divide(row["Spend"], row["Contacts"]),
+        axis=1,
+    )
+    display_df = _blank_non_primary_result_metrics(display_df)
+    return _scalarize_display_df(display_df)
+
+
+def _pipeline_project_mapping_frame():
+    rows = [
+        {
+            "project": meta_project,
+            "mapped_pipeline_project": _normalize_pipeline_project_name(pipeline_project),
+            "pipeline_project_key": _normalize_pipeline_project_key(pipeline_project),
+        }
+        for pipeline_project, meta_project in PIPELINE_TO_META_PROJECTS.items()
+    ]
+    return pd.DataFrame(rows).drop_duplicates(
+        subset=["project", "pipeline_project_key"], keep="first"
+    )
+
+
+def _mapped_pipeline_projects(pipeline_project_df):
+    contact_columns = PIPELINE_CONTACT_COLUMNS
+    if pipeline_project_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "project",
+                "mapped_pipeline_project",
+                "pipeline_project",
+                "pipeline_project_key",
+                *contact_columns,
+            ]
+        )
+
+    mapping_df = _pipeline_project_mapping_frame()
+    pipeline_project_df = pipeline_project_df.copy()
+    for column in contact_columns:
+        if column not in pipeline_project_df.columns:
+            pipeline_project_df[column] = 0
+    mapped_df = mapping_df.merge(
+        pipeline_project_df,
+        on="pipeline_project_key",
+        how="inner",
+    )
+    mapped_df[contact_columns] = mapped_df[contact_columns].fillna(0)
+    return mapped_df
+
+
+def _unmatched_pipeline_projects(pipeline_project_df):
+    if pipeline_project_df.empty:
+        return pipeline_project_df
+
+    mapped_keys = set(_pipeline_project_mapping_frame()["pipeline_project_key"].tolist())
+    return pipeline_project_df[
+        ~pipeline_project_df["pipeline_project_key"].isin(mapped_keys)
+    ].copy()
+
+
+def _pipeline_projects_debug(pipeline_project_df):
+    if pipeline_project_df.empty:
+        return
+
+    mapped_df = _mapped_pipeline_projects(pipeline_project_df)
+    unmatched_df = _unmatched_pipeline_projects(pipeline_project_df)
+
+    if not mapped_df.empty:
+        with st.expander("Mapped Sale Pipeline Project Counts", expanded=False):
+            st.caption(
+                "These Sale Pipeline project names are mapped to Meta project codes before Project Performance contact counts are joined."
+            )
+            display_df = mapped_df[
+                [
+                    "project",
+                    "pipeline_project",
+                    "total_contacts",
+                ]
+            ].rename(
+                columns={
+                    "project": "Meta Project",
+                    "pipeline_project": "Sale Pipeline Project",
+                    "total_contacts": "Contacts",
+                }
+            )
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    if unmatched_df.empty:
+        return
+
+    with st.expander("Unmatched Sale Pipeline Projects", expanded=False):
+        st.caption(
+            "These Sale Pipeline project names were uploaded but are not mapped to a Meta project code."
+        )
+        display_df = unmatched_df.rename(
+            columns={
+                "pipeline_project": "Sale Pipeline Project",
+                "total_contacts": "Contacts",
+            }
+        )
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+
+def _pipeline_adsets_debug(pipeline_adset_df, adset_df):
+    match_details = adset_df.attrs.get("pipeline_adset_match_details", {})
+    if not match_details and pipeline_adset_df.empty and adset_df.empty:
+        return
+
+    exact_df = match_details.get("exact", pd.DataFrame())
+    token_df = match_details.get("token", match_details.get("fallback", pd.DataFrame()))
+    ambiguous_token_df = match_details.get("ambiguous_token", pd.DataFrame())
+    unmatched_meta_df = match_details.get("unmatched_meta", pd.DataFrame())
+    unmatched_pipeline_df = match_details.get("unmatched_pipeline", pd.DataFrame())
+
+    if not exact_df.empty:
+        with st.expander("Ad Set Matches: Exact Normalized Name", expanded=False):
+            display_df = exact_df[
+                [
+                    "adset",
+                    "adset_name",
+                    "normalized_meta_key",
+                    "normalized_pipeline_key",
+                    "meta_creative_type",
+                    "pipeline_creative_type",
+                    "match_status",
+                    "total_contacts",
+                ]
+            ].rename(
+                columns={
+                    "adset": "Meta Ad Set",
+                    "adset_name": "Sale Pipeline Ad Set",
+                    "total_contacts": "Contacts",
+                }
+            )
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    if not token_df.empty:
+        with st.expander("Ad Set Matches: Unique Token Key", expanded=False):
+            st.caption(
+                "Token matches are accepted only when exactly one unmatched Meta ad set and one unmatched Sale Pipeline ad set share project code, result type, and group token."
+            )
+            token_columns = [
+                "adset",
+                "adset_name",
+                "normalized_meta_key",
+                "normalized_pipeline_key",
+                "meta_creative_type",
+                "pipeline_creative_type",
+                "match_status",
+                "total_contacts",
+            ]
+            if "token_key" in token_df.columns:
+                token_columns.append("token_key")
+            display_df = token_df[token_columns].rename(
+                columns={
+                    "adset": "Meta Ad Set",
+                    "adset_name": "Sale Pipeline Ad Set",
+                    "total_contacts": "Contacts",
+                    "token_key": "Token Key",
+                }
+            )
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    if not ambiguous_token_df.empty:
+        with st.expander("Ad Set Matches: Ambiguous Token Keys", expanded=False):
+            st.caption(
+                "These token keys matched multiple Meta or Sale Pipeline ad sets, so no automatic contact match was applied."
+            )
+            display_df = ambiguous_token_df.rename(
+                columns={
+                    "token_key": "Token Key",
+                    "meta_adsets": "Meta Ad Sets",
+                    "pipeline_adsets": "Sale Pipeline Ad Sets",
+                    "meta_count": "Meta Count",
+                    "pipeline_count": "Pipeline Count",
+                    "pipeline_contacts": "Pipeline Contacts",
+                }
+            )
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    if not unmatched_pipeline_df.empty:
+        with st.expander("Ad Set Matches: Unmatched Sale Pipeline Ad Sets", expanded=False):
+            st.caption(
+                "These Sale Pipeline ad set names were uploaded but did not match a selected Meta ad set."
+            )
+            display_df = unmatched_pipeline_df[["adset_name", "total_contacts"]].rename(
+                columns={
+                    "adset_name": "Sale Pipeline Ad Set",
+                    "total_contacts": "Contacts",
+                }
+            )
+            if "normalized_pipeline_key" in unmatched_pipeline_df.columns:
+                display_df["normalized_pipeline_key"] = unmatched_pipeline_df[
+                    "normalized_pipeline_key"
+                ]
+            if "pipeline_creative_type" in unmatched_pipeline_df.columns:
+                display_df["pipeline_creative_type"] = unmatched_pipeline_df[
+                    "pipeline_creative_type"
+                ]
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    if not unmatched_meta_df.empty:
+        with st.expander("Ad Set Matches: Unmatched Meta Ad Sets", expanded=False):
+            st.caption(
+                "These selected Meta ad set names did not match any date-filtered Sale Pipeline ad set."
+            )
+            display_columns = ["adset"]
+            if "normalized_meta_key" in unmatched_meta_df.columns:
+                display_columns.append("normalized_meta_key")
+            if "meta_creative_type" in unmatched_meta_df.columns:
+                display_columns.append("meta_creative_type")
+            display_df = unmatched_meta_df[display_columns].rename(
+                columns={
+                    "adset": "Meta Ad Set",
+                }
+            )
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 
 def _cache_status_from_created_at(cache_created_at):
@@ -700,10 +2490,15 @@ def _card_grid(cards, card_class="kpi-card"):
         value = escape(str(card["value"]))
         detail = escape(str(card.get("detail", "")))
         extra_class = str(card.get("class", "")).strip()
-        classes = f"{card_class} {extra_class}".strip()
+        accent_class = _card_accent_class(label)
+        icon = escape(str(card.get("icon", _card_icon(label))))
+        classes = f"{card_class} {extra_class} {accent_class}".strip()
         html += (
             f'<div class="{classes}">'
+            '<div class="kpi-topline">'
             f'<div class="kpi-group">{group}</div>'
+            f'<div class="kpi-icon">{icon}</div>'
+            "</div>"
             f'<div class="kpi-label">{label}</div>'
             f'<div class="kpi-value">{value}</div>'
             f'<div class="decision-detail">{detail}</div>'
@@ -711,6 +2506,36 @@ def _card_grid(cards, card_class="kpi-card"):
         )
     html += "</div>"
     st.markdown(html, unsafe_allow_html=True)
+
+
+def _card_accent_class(label):
+    label_text = label.casefold()
+    if "cost per lead" in label_text or "cpl" in label_text:
+        return "accent-cpl"
+    if "lead" in label_text:
+        return "accent-leads"
+    if "inbox" in label_text:
+        return "accent-inbox"
+    if "contact" in label_text:
+        return "accent-contacts"
+    return ""
+
+
+def _card_icon(label):
+    label_text = label.casefold()
+    if "lead" in label_text:
+        return "L"
+    if "inbox" in label_text:
+        return "M"
+    if "contact" in label_text:
+        return "C"
+    if "cost" in label_text:
+        return "฿"
+    if "spend" in label_text:
+        return "฿"
+    if "ctr" in label_text:
+        return "%"
+    return "•"
 
 
 def _kpi_cards(filtered_df):
@@ -1171,6 +2996,8 @@ def _campaign_table(campaign_df):
         "results",
         "inbox_messages",
         "leads",
+        "total_contacts",
+        "cost_per_contact",
         "cost_per_result",
         "cost_per_inbox",
         "cost_per_lead",
@@ -1188,6 +3015,8 @@ def _campaign_table(campaign_df):
             "results": "Results",
             "inbox_messages": "Inbox Messages",
             "leads": "Leads",
+            "total_contacts": "Contacts",
+            "cost_per_contact": "Cost per Contact",
             "cost_per_result": "Cost per Result",
             "cost_per_inbox": "Cost per Inbox",
             "cost_per_lead": "Cost per Lead",
@@ -1203,9 +3032,9 @@ def _campaign_table(campaign_df):
     def highlight(row):
         styles = [""] * len(row)
         if pd.notna(high_cpl) and pd.notna(row["Cost per Lead"]) and row["Cost per Lead"] >= high_cpl:
-            styles = ["background-color: #fff7ed"] * len(row)
+            styles = ["background-color: rgba(251, 146, 60, 0.14); color: #f8fafc"] * len(row)
         if pd.notna(best_cpr) and row["Results"] > 0 and row["Cost per Result"] <= best_cpr:
-            styles = ["background-color: #ecfdf5"] * len(row)
+            styles = ["background-color: rgba(52, 211, 153, 0.14); color: #f8fafc"] * len(row)
         return styles
 
     styled = (
@@ -1216,6 +3045,8 @@ def _campaign_table(campaign_df):
                 "Results": "{:,.0f}",
                 "Inbox Messages": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
                 "Leads": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
+                "Contacts": "{:,.0f}",
+                "Cost per Contact": _format_currency,
                 "Cost per Result": _format_currency,
                 "Cost per Inbox": _format_currency,
                 "Cost per Lead": _format_currency,
@@ -1232,44 +3063,16 @@ def _adset_table(adset_df):
     st.markdown('<div class="section-title">Ad Set Performance</div>', unsafe_allow_html=True)
     st.caption("Only primary result metrics are shown in this table.")
     _display_separation_note()
-    columns = [
-        "project",
-        "campaign",
-        "adset",
-        "primary_result_type",
-        "spend",
-        "results",
-        "inbox_messages",
-        "leads",
-        "cost_per_result",
-        "cost_per_inbox",
-        "cost_per_lead",
-        "CTR",
-        "CPM",
-        "Frequency",
-    ]
-    display_df = adset_df[columns].rename(
-        columns={
-            "project": "Project",
-            "campaign": "Campaign",
-            "adset": "Ad Set",
-            "primary_result_type": "Primary Result Type",
-            "spend": "Spend",
-            "results": "Results",
-            "inbox_messages": "Inbox Messages",
-            "leads": "Leads",
-            "cost_per_result": "Cost per Result",
-            "cost_per_inbox": "Cost per Inbox",
-            "cost_per_lead": "Cost per Lead",
-        }
-    )
-    display_df = _blank_non_primary_result_metrics(display_df)
+    adset_df = _ensure_adset_contact_metrics(adset_df)
+    display_df = _adset_display_df(adset_df)
     styled = display_df.style.format(
         {
             "Spend": _format_currency,
             "Results": "{:,.0f}",
             "Inbox Messages": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
             "Leads": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
+            "Contacts": "{:,.0f}",
+            "Cost per Contact": _format_currency,
             "Cost per Result": _format_currency,
             "Cost per Inbox": _format_currency,
             "Cost per Lead": _format_currency,
@@ -1676,6 +3479,7 @@ def _aggregation_check(filtered_df):
 def _project_performance(project_df):
     st.markdown('<div class="section-title">Project Performance</div>', unsafe_allow_html=True)
     _display_separation_note()
+    project_df = _ensure_project_contact_metrics(project_df)
     if _verify_project_aggregation(project_df):
         st.caption(
             "Project costs are recalculated after grouping: total spend / primary results, inbox campaign spend / inbox campaign results, and lead campaign spend / lead campaign results."
@@ -1688,6 +3492,8 @@ def _project_performance(project_df):
             "results",
             "inbox_messages",
             "leads",
+            "total_contacts",
+            "cost_per_contact",
             "cost_per_result",
             "cost_per_inbox",
             "cost_per_lead",
@@ -1703,6 +3509,8 @@ def _project_performance(project_df):
             "results": "Results",
             "inbox_messages": "Inbox Messages",
             "leads": "Leads",
+            "total_contacts": "Contacts",
+            "cost_per_contact": "Cost per Contact",
             "cost_per_result": "Cost per Result",
             "cost_per_inbox": "Cost per Inbox",
             "cost_per_lead": "Cost per Lead",
@@ -1715,6 +3523,8 @@ def _project_performance(project_df):
             "Results": "{:,.0f}",
             "Inbox Messages": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
             "Leads": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
+            "Contacts": "{:,.0f}",
+            "Cost per Contact": _format_currency,
             "Cost per Result": _format_currency,
             "Cost per Inbox": _format_currency,
             "Cost per Lead": _format_currency,
@@ -1777,11 +3587,11 @@ def _project_performance(project_df):
     cpl_fig.update_xaxes(title="Cost per Lead (฿)")
     cpl_fig.update_layout(yaxis={"categoryorder": "total descending"})
 
-    chart_columns[0].plotly_chart(inbox_fig, use_container_width=True)
-    chart_columns[1].plotly_chart(leads_fig, use_container_width=True)
+    _render_plotly_chart(chart_columns[0], inbox_fig)
+    _render_plotly_chart(chart_columns[1], leads_fig)
     chart_columns = st.columns(2)
-    chart_columns[0].plotly_chart(cpi_fig, use_container_width=True)
-    chart_columns[1].plotly_chart(cpl_fig, use_container_width=True)
+    _render_plotly_chart(chart_columns[0], cpi_fig)
+    _render_plotly_chart(chart_columns[1], cpl_fig)
 
 
 def _top_campaigns_by_results(campaign_df):
@@ -1996,7 +3806,7 @@ def _charts(lead_daily_df, inbox_daily_df, campaign_df):
     for row in rows:
         columns = st.columns(2)
         for column, figure in zip(columns, row):
-            column.plotly_chart(figure, use_container_width=True)
+            _render_plotly_chart(column, figure)
 
 
 def _creative_section(creative_df):
@@ -2045,7 +3855,7 @@ def _creative_section(creative_df):
     for row in rows:
         chart_columns = st.columns(2)
         for column, figure in zip(chart_columns, row):
-            column.plotly_chart(figure, use_container_width=True)
+            _render_plotly_chart(column, figure)
     _creative_gallery(creative_df)
 
 
@@ -2148,7 +3958,12 @@ def _unmapped_campaigns_debug(ads_df):
 
 def main():
     st.set_page_config(page_title="Real Estate Meta Ads Dashboard", layout="wide")
-    _styles()
+    dark_theme = st.sidebar.toggle(
+        "Dark analytics theme",
+        value=True,
+        key="dark_analytics_theme",
+    )
+    _styles(dark_theme)
 
     today = date.today()
     default_from = today - timedelta(days=6)
@@ -2161,6 +3976,15 @@ def main():
         date_from = st.date_input("META_DATE_FROM", value=default_from, key=STATE_DATE_FROM)
         date_to = st.date_input("META_DATE_TO", value=today, key=STATE_DATE_TO)
         preset = st.selectbox("META_DATE_PRESET", PRESETS, index=2, key=STATE_PRESET)
+        pipeline_upload = st.file_uploader(
+            "Upload Sale Pipeline Leads CSV/XLS/XLSX",
+            type=["csv", "xlsx", "xls"],
+            key="sale_pipeline_leads_csv",
+        )
+        pipeline_df = _load_pipeline_upload(pipeline_upload)
+        pipeline_filtered_df = _filter_pipeline_by_date_range(
+            pipeline_df, date_from, date_to
+        )
         if st.button("Clear cached Meta data", use_container_width=True, key="clear_cached_meta_data"):
             _cached_meta_ads_data.clear()
             st.session_state.pop(STATE_ADS_DF, None)
@@ -2301,12 +4125,18 @@ def main():
         return
 
     project_df = _project_summary(filtered_df, sort_by, top_n)
+    pipeline_adset_df = _pipeline_adset_summary(pipeline_filtered_df)
+    pipeline_project_df = pd.DataFrame()
     lead_filtered_df = filtered_df[filtered_df["primary_result_type"] == "Lead"]
     inbox_filtered_df = filtered_df[filtered_df["primary_result_type"] == "Inbox"]
     lead_daily_df = daily_summary(lead_filtered_df)
     inbox_daily_df = daily_summary(inbox_filtered_df)
     campaign_df = _dashboard_campaign_summary(filtered_df).sort_values("spend", ascending=False)
     adset_df = _dashboard_adset_summary(filtered_df, sort_by)
+    adset_df = _join_pipeline_adset_data(adset_df, pipeline_adset_df)
+    adset_df = _clear_non_primary_adset_contacts(adset_df)
+    campaign_df = _join_adset_contacts_to_campaign(campaign_df, adset_df)
+    project_df = _join_campaign_contacts_to_project(project_df, campaign_df)
     creative_df = creative_summary(filtered_df)
 
     _decision_summary(campaign_df)
@@ -2318,6 +4148,8 @@ def main():
     _project_performance(project_df)
     _management_notes(campaign_df)
     _unmapped_campaigns_debug(ads_df)
+    _pipeline_projects_debug(pipeline_project_df)
+    _pipeline_adsets_debug(pipeline_adset_df, adset_df)
     _campaign_table(campaign_df)
     _adset_table(adset_df)
     _charts(lead_daily_df, inbox_daily_df, campaign_df)
