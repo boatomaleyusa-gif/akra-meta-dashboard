@@ -1538,7 +1538,6 @@ def _load_pipeline_upload(uploaded_file):
     if uploaded_file is None:
         return pd.DataFrame()
     file_name = getattr(uploaded_file, "name", "")
-    print("PIPELINE_UPLOAD_RECEIVED", file_name)
     extension = Path(file_name).suffix.lower()
     if extension not in {".csv", ".xlsx", ".xls"}:
         st.sidebar.warning(
@@ -1601,6 +1600,9 @@ def _load_pipeline_upload(uploaded_file):
     if legacy_html_export:
         st.sidebar.info("Loaded legacy HTML Excel export")
     print("PIPELINE_PARSE_OK", len(pipeline_df))
+    min_date, max_date = _pipeline_date_bounds(pipeline_df)
+    print("PIPELINE_MIN_DATE", _format_pipeline_bound_date(min_date))
+    print("PIPELINE_MAX_DATE", _format_pipeline_bound_date(max_date))
     return pipeline_df
 
 
@@ -2151,9 +2153,34 @@ def _normalize_pipeline_date_text(value):
     return text
 
 
+def _pipeline_date_bounds(pipeline_df):
+    if pipeline_df.empty or "created_date" not in pipeline_df.columns:
+        return pd.NaT, pd.NaT
+    parsed_dates = pd.to_datetime(pipeline_df["created_date"], errors="coerce").dropna()
+    if parsed_dates.empty:
+        return pd.NaT, pd.NaT
+    return parsed_dates.min(), parsed_dates.max()
+
+
+def _format_pipeline_bound_date(value):
+    if pd.isna(value):
+        return ""
+    return pd.Timestamp(value).date().isoformat()
+
+
+def _warn_empty_pipeline_date_filter(pipeline_df):
+    min_date, max_date = _pipeline_date_bounds(pipeline_df)
+    st.sidebar.warning(
+        "Sale Pipeline has 0 rows in selected date range. "
+        f"Pipeline date range: {_format_pipeline_bound_date(min_date)} to "
+        f"{_format_pipeline_bound_date(max_date)}."
+    )
+
+
 def _filter_pipeline_by_date_range(pipeline_df, date_from, date_to):
     if pipeline_df.empty:
-        print("PIPELINE_DATE_FILTER", 0)
+        print("PIPELINE_DATE_FILTER", 0, date_from, date_to)
+        _warn_empty_pipeline_date_filter(pipeline_df)
         return pipeline_df.copy()
 
     filtered_df = pipeline_df.copy()
@@ -2171,7 +2198,9 @@ def _filter_pipeline_by_date_range(pipeline_df, date_from, date_to):
         & (parsed_dates >= start_date)
         & (parsed_dates <= end_date)
     ].copy()
-    print("PIPELINE_DATE_FILTER", len(filtered_df))
+    print("PIPELINE_DATE_FILTER", len(filtered_df), date_from, date_to)
+    if filtered_df.empty:
+        _warn_empty_pipeline_date_filter(pipeline_df)
     return filtered_df
 
 
@@ -5209,6 +5238,7 @@ def main():
     date_to = st.session_state[STATE_DATE_TO]
     preset = st.session_state[STATE_PRESET]
     pipeline_upload = st.session_state.get("sale_pipeline_leads_csv")
+    pipeline_upload_received_logged = False
     generate = False
     hidden_slot = _HiddenSidebarSlot()
     cache_status_slot = hidden_slot
@@ -5231,6 +5261,12 @@ def main():
                 type=["csv", "xlsx", "xls"],
                 key="sale_pipeline_leads_csv",
             )
+            if pipeline_upload is not None:
+                print(
+                    "PIPELINE_UPLOAD_RECEIVED",
+                    getattr(pipeline_upload, "name", ""),
+                )
+                pipeline_upload_received_logged = True
             if st.button("Clear cached Meta data", use_container_width=True, key="clear_cached_meta_data"):
                 _cached_meta_ads_data.clear()
                 st.session_state.pop(STATE_ADS_DF, None)
@@ -5271,47 +5307,42 @@ def main():
     _restore_pipeline_cache_to_session()
 
     pipeline_upload_present = pipeline_upload is not None
+    if pipeline_upload_present and not pipeline_upload_received_logged:
+        print("PIPELINE_UPLOAD_RECEIVED", getattr(pipeline_upload, "name", ""))
     pipeline_upload_signature = _pipeline_upload_signature(pipeline_upload)
-    previous_pipeline_upload_signature = st.session_state.get(
-        STATE_PIPELINE_UPLOAD_SIGNATURE,
-        "",
-    )
     if pipeline_upload_present:
-        if (
-            pipeline_upload_signature == previous_pipeline_upload_signature
-            and STATE_PIPELINE_DF in st.session_state
-        ):
-            pipeline_df = st.session_state[STATE_PIPELINE_DF]
+        pipeline_df = _load_pipeline_upload(pipeline_upload)
+        st.session_state[STATE_PIPELINE_DF] = pipeline_df
+        st.session_state[STATE_PIPELINE_UPLOAD_SIGNATURE] = pipeline_upload_signature
+        st.session_state[STATE_PIPELINE_METADATA] = _pipeline_upload_metadata(
+            pipeline_upload,
+            pipeline_df,
+            pipeline_upload_signature,
+        )
+        if not pipeline_df.empty:
+            _save_pipeline_cache(
+                pipeline_df,
+                st.session_state[STATE_PIPELINE_METADATA],
+            )
+        if STATE_ADS_DF in st.session_state:
+            st.session_state[STATE_PIPELINE_UPLOAD_MESSAGE] = (
+                "Pipeline data loaded and joined with current report."
+            )
         else:
-            pipeline_df = _load_pipeline_upload(pipeline_upload)
-            if not pipeline_df.empty:
-                st.session_state[STATE_PIPELINE_DF] = pipeline_df
-                st.session_state[STATE_PIPELINE_UPLOAD_SIGNATURE] = pipeline_upload_signature
-                st.session_state[STATE_PIPELINE_METADATA] = _pipeline_upload_metadata(
-                    pipeline_upload,
-                    pipeline_df,
-                    pipeline_upload_signature,
-                )
-                _save_pipeline_cache(
-                    pipeline_df,
-                    st.session_state[STATE_PIPELINE_METADATA],
-                )
-                if STATE_ADS_DF in st.session_state:
-                    st.session_state[STATE_PIPELINE_UPLOAD_MESSAGE] = (
-                        "Pipeline data loaded and joined with current report."
-                    )
-                else:
-                    st.session_state[STATE_PIPELINE_UPLOAD_MESSAGE] = (
-                        "Pipeline loaded. Click Generate Report to join with Meta data."
-                    )
+            st.session_state[STATE_PIPELINE_UPLOAD_MESSAGE] = (
+                "Pipeline loaded. Click Generate Report to join with Meta data."
+            )
     else:
         pipeline_df = st.session_state.get(
             STATE_PIPELINE_DF,
             pd.DataFrame(columns=PIPELINE_REQUIRED_COLUMNS),
         )
-    pipeline_filtered_df = _filter_pipeline_by_date_range(
-        pipeline_df, date_from, date_to
-    )
+    if STATE_PIPELINE_DF in st.session_state:
+        pipeline_filtered_df = _filter_pipeline_by_date_range(
+            pipeline_df, date_from, date_to
+        )
+    else:
+        pipeline_filtered_df = pd.DataFrame(columns=PIPELINE_REQUIRED_COLUMNS)
     pipeline_upload_message = st.session_state.get(STATE_PIPELINE_UPLOAD_MESSAGE, "")
     if pipeline_upload_message:
         if pipeline_upload_message == "Pipeline data loaded and joined with current report.":
