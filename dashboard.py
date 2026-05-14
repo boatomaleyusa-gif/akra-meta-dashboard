@@ -1513,6 +1513,12 @@ def _load_dashboard_data(use_custom_range, date_from, date_to, preset, raise_rat
     if "adset" not in meta_df.columns:
         meta_df["adset"] = ""
     meta_df = add_metrics(meta_df)
+    meta_df["campaign_key"] = meta_df["campaign"].apply(_normalize_meta_campaign_key)
+    meta_df["adset_key"] = meta_df["adset"].apply(_normalize_meta_adset_key)
+    meta_df["adset_key"] = meta_df["adset_key"].where(
+        meta_df["adset_key"] != "",
+        meta_df["campaign_key"],
+    )
     meta_df["project"] = meta_df.apply(
         lambda row: _extract_project(row["campaign"], row["adset"]), axis=1
     )
@@ -1590,9 +1596,7 @@ def _load_pipeline_upload(uploaded_file):
     pipeline_df["pipeline_result_type"] = pipeline_df["is_organic"].apply(
         lambda is_organic: ORGANIC_RESULT_TYPE if is_organic else ""
     )
-    pipeline_df["adset_key"] = pipeline_df["adset_name"].apply(
-        _normalize_pipeline_adset_key
-    )
+    pipeline_df["adset_key"] = pipeline_df.apply(_pipeline_adset_join_key, axis=1)
     if legacy_html_export:
         st.sidebar.info("Loaded legacy HTML Excel export")
     return pipeline_df
@@ -1719,48 +1723,139 @@ def _normalize_pipeline_project_name(value):
 
 
 def _normalize_pipeline_project_key(value):
+    return normalize_key(value)
+
+
+NORMALIZE_KEY_STOPWORDS = {
+    "page",
+    "leadgen",
+    "leadpage",
+    "lead",
+    "leads",
+    "inbox",
+    "business",
+    "local",
+    "message",
+    "messages",
+    "messaging",
+    "msg",
+    "ib",
+    "ld",
+}
+
+
+def normalize_key(value):
     if pd.isna(value):
         return ""
-    text = unicodedata.normalize("NFKC", str(value))
+
+    text = unicodedata.normalize("NFKC", str(value)).casefold()
     text = text.replace("\u00a0", " ")
     text = text.translate(
         str.maketrans(
             {
-                "\u2010": "-",
-                "\u2011": "-",
-                "\u2012": "-",
-                "\u2013": "-",
-                "\u2014": "-",
-                "\u2212": "-",
-                "\ufe58": "-",
-                "\ufe63": "-",
-                "\uff0d": "-",
-                "\u2018": "'",
-                "\u2019": "'",
-                "\u201c": '"',
-                "\u201d": '"',
-                "\uff0c": ",",
-                "\u3001": ",",
-                "\uff0f": "/",
+                "_": " ",
+                "-": " ",
+                "/": " ",
+                "\\": " ",
+                "(": " ",
+                ")": " ",
+                "[": " ",
+                "]": " ",
+                "{": " ",
+                "}": " ",
+                "\u2010": " ",
+                "\u2011": " ",
+                "\u2012": " ",
+                "\u2013": " ",
+                "\u2014": " ",
+                "\u2212": " ",
+                "\ufe58": " ",
+                "\ufe63": " ",
+                "\uff0d": " ",
+                "\uff0f": " ",
+                "\u0e2f": " ",
+                "\u0e46": " ",
+                "\u0e5a": " ",
+                "\u0e5b": " ",
             }
         )
     )
+    text = "".join(
+        " " if unicodedata.category(character)[0] in {"P", "S"} else character
+        for character in text
+    )
+    text = re.sub(
+        r"\b(?:leadgen|leadpage|lead|leads|inbox|ib|ld|msg)\s*g\s*0*(\d+)\b",
+        r" g\1 ",
+        text,
+    )
+    text = re.sub(r"\bg\s*0*(\d+)\b", r" g\1 ", text)
     text = re.sub(r"\s+", " ", text.strip())
-    text = re.sub(r"\s*-\s*", "-", text)
-    text = re.sub(r"\s*/\s*", "/", text)
-    return text.casefold()
+
+    tokens = [
+        token
+        for token in text.split()
+        if token not in NORMALIZE_KEY_STOPWORDS
+        and not re.fullmatch(r"\d{6,8}", token)
+    ]
+    normalized_tokens = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "g" and index + 1 < len(tokens) and tokens[index + 1].isdigit():
+            normalized_tokens.append(f"g{int(tokens[index + 1])}")
+            index += 2
+            continue
+        group_match = re.fullmatch(r"g0*(\d+)", token)
+        if group_match:
+            normalized_tokens.append(f"g{int(group_match.group(1))}")
+        else:
+            normalized_tokens.append(token)
+        index += 1
+
+    for index, token in enumerate(normalized_tokens):
+        if re.fullmatch(r"g\d+", token):
+            normalized_tokens = normalized_tokens[: index + 1]
+            break
+
+    return "".join(normalized_tokens)
 
 
 def _normalize_match_key(value):
-    return _normalize_meta_adset_key(value)
+    return normalize_key(value)
+
+
+def _normalize_meta_campaign_key(value):
+    return normalize_key(value)
 
 
 def _normalize_meta_adset_key(value):
-    return extract_core_adset_key(value)
+    return normalize_key(value)
 
 
 def _normalize_pipeline_adset_key(value):
-    return extract_core_adset_key(value)
+    return normalize_key(value)
+
+
+def _pipeline_project_to_meta_project(project_key):
+    mapping = {
+        _normalize_pipeline_project_key(pipeline_project): meta_project
+        for pipeline_project, meta_project in PIPELINE_TO_META_PROJECTS.items()
+    }
+    return mapping.get(project_key, "")
+
+
+def _pipeline_adset_join_key(row):
+    adset_name = row.get("adset_name", "")
+    adset_key = _normalize_pipeline_adset_key(adset_name)
+    project_key = row.get("pipeline_project_key", "")
+    if not project_key:
+        project_key = _normalize_pipeline_project_key(row.get("pipeline_project", ""))
+    meta_project = _pipeline_project_to_meta_project(project_key)
+    meta_project_key = normalize_key(meta_project)
+    if meta_project_key and meta_project_key not in adset_key:
+        return normalize_key(f"{meta_project} {adset_name}")
+    return adset_key
 
 
 def extract_core_adset_key(name):
@@ -2132,6 +2227,11 @@ def _pipeline_adset_summary(pipeline_df):
     if "is_organic" in summary_df.columns:
         summary_df = summary_df[~summary_df["is_organic"].fillna(False).astype(bool)]
     summary_df["adset_name"] = summary_df["adset_name"].fillna("").astype(str).str.strip()
+    summary_df["pipeline_project_key"] = summary_df.get(
+        "pipeline_project",
+        pd.Series("", index=summary_df.index),
+    ).apply(_normalize_pipeline_project_key)
+    summary_df["adset_key"] = summary_df.apply(_pipeline_adset_join_key, axis=1)
     summary_df = summary_df[summary_df["adset_key"] != ""]
     summary_df["pipeline_created_date"] = pd.to_datetime(
         summary_df["created_date"], errors="coerce"
@@ -2218,7 +2318,9 @@ def _join_pipeline_adset_data(adset_df, pipeline_adset_df):
     adset_df = adset_df.drop(
         columns=[
             "total_contacts",
+            "contacts",
             "cost_per_contact",
+            "campaign_key",
             "normalized_meta_key",
             "normalized_pipeline_key",
             "meta_creative_type",
@@ -2232,7 +2334,12 @@ def _join_pipeline_adset_data(adset_df, pipeline_adset_df):
     )
     if "adset" not in adset_df.columns:
         adset_df["adset"] = ""
+    adset_df["campaign_key"] = adset_df["campaign"].apply(_normalize_meta_campaign_key)
     adset_df["adset_key"] = adset_df["adset"].apply(_normalize_meta_adset_key)
+    adset_df["adset_key"] = adset_df["adset_key"].where(
+        adset_df["adset_key"] != "",
+        adset_df["campaign_key"],
+    )
     adset_df["normalized_meta_key"] = adset_df["adset_key"]
     adset_df["meta_creative_type"] = adset_df["adset"].apply(
         extract_core_adset_creative_type
@@ -4022,9 +4129,15 @@ def _add_weighted_metrics(grouped):
 
 
 def _dashboard_campaign_summary(filtered_df):
+    filtered_df = filtered_df.copy()
+    if "campaign_key" not in filtered_df.columns:
+        filtered_df["campaign_key"] = filtered_df["campaign"].apply(
+            _normalize_meta_campaign_key
+        )
     grouped = (
         filtered_df.groupby(["campaign", "project", "primary_result_type"], as_index=False)
         .agg(
+            campaign_key=("campaign_key", "first"),
             result_type=("result_type", "first"),
             spend=("spend", "sum"),
             results=("results", "sum"),
@@ -4051,9 +4164,22 @@ def _dashboard_campaign_summary(filtered_df):
 
 
 def _dashboard_adset_summary(filtered_df, sort_by):
+    filtered_df = filtered_df.copy()
+    if "campaign_key" not in filtered_df.columns:
+        filtered_df["campaign_key"] = filtered_df["campaign"].apply(
+            _normalize_meta_campaign_key
+        )
+    if "adset_key" not in filtered_df.columns:
+        filtered_df["adset_key"] = filtered_df["adset"].apply(_normalize_meta_adset_key)
+    filtered_df["adset_key"] = filtered_df["adset_key"].where(
+        filtered_df["adset_key"] != "",
+        filtered_df["campaign_key"],
+    )
     grouped = (
         filtered_df.groupby(["project", "campaign", "adset", "primary_result_type"], as_index=False)
         .agg(
+            campaign_key=("campaign_key", "first"),
+            adset_key=("adset_key", "first"),
             spend=("spend", "sum"),
             results=("results", "sum"),
             inbox_messages=("inbox_messages", "sum"),
