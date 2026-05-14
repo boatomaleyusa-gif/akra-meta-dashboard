@@ -1,5 +1,6 @@
 ﻿from datetime import date, timedelta
 from datetime import datetime
+import hashlib
 from html import escape
 import io
 import logging
@@ -1256,6 +1257,61 @@ def _styles(dark_theme=True):
                 box-shadow: none !important;
                 border-color: rgba(71, 85, 105, 0.48) !important;
             }
+            .dark-html-table-wrap {
+                width: 100%;
+                max-height: 360px;
+                overflow: auto;
+                background: #071226;
+                border: 1px solid rgba(120,160,255,0.12);
+                border-radius: 0 0 8px 8px;
+                box-shadow: var(--shadow);
+            }
+            .dark-html-table {
+                width: 100%;
+                min-width: 980px;
+                border-collapse: collapse;
+                background: #071226;
+                color: #dbe7ff;
+                font-size: 12.75px;
+                line-height: 1.42;
+            }
+            .dark-html-table thead th {
+                position: sticky;
+                top: 0;
+                z-index: 2;
+                background: #0f1c36;
+                color: #8fb7ff;
+                border: 1px solid rgba(120,160,255,0.12);
+                padding: 9px 10px;
+                text-align: left;
+                font-weight: 700;
+                white-space: nowrap;
+            }
+            .dark-html-table tbody tr:nth-child(odd) td {
+                background: #071226;
+            }
+            .dark-html-table tbody tr:nth-child(even) td {
+                background: #0b1730;
+            }
+            .dark-html-table tbody tr:hover td {
+                background: #13264a;
+            }
+            .dark-html-table td {
+                color: #dbe7ff;
+                border: 1px solid rgba(120,160,255,0.12);
+                padding: 8px 10px;
+                vertical-align: middle;
+                white-space: nowrap;
+            }
+            .dark-html-table td:first-child,
+            .dark-html-table th:first-child {
+                white-space: normal;
+                min-width: 220px;
+            }
+            .dark-html-table .numeric-cell {
+                text-align: right;
+                font-variant-numeric: tabular-nums;
+            }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1544,13 +1600,13 @@ def _pipeline_upload_signature(uploaded_file):
     if uploaded_file is None:
         return ""
     file_name = getattr(uploaded_file, "name", "")
-    file_size = getattr(uploaded_file, "size", None)
-    if file_size is None:
-        try:
-            file_size = len(uploaded_file.getvalue())
-        except Exception:
-            file_size = ""
-    return f"{file_name}:{file_size}"
+    try:
+        file_bytes = uploaded_file.getvalue()
+    except Exception:
+        file_bytes = b""
+    file_size = len(file_bytes)
+    checksum = hashlib.md5(file_bytes).hexdigest() if file_bytes else ""
+    return f"{file_name}:{file_size}:{checksum}"
 
 
 def _is_organic_pipeline_row(row):
@@ -1964,8 +2020,6 @@ def _filter_pipeline_by_date_range(pipeline_df, date_from, date_to):
         & (parsed_dates >= start_date)
         & (parsed_dates <= end_date)
     ].copy()
-    st.sidebar.caption(f"Pipeline rows uploaded: {len(pipeline_df):,}")
-    st.sidebar.caption(f"Pipeline rows in selected date range: {len(filtered_df):,}")
     return filtered_df
 
 
@@ -3593,6 +3647,62 @@ def _render_dark_dataframe(display_df, **kwargs):
     st.dataframe(styled, **kwargs)
 
 
+def _performance_table_formatters():
+    return {
+        "Spend": _format_currency,
+        "Results": "{:,.0f}",
+        "Inbox Messages": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
+        "Leads": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
+        "Contacts": "{:,.0f}",
+        "Cost per Contact": _format_currency,
+        "Cost per Result": _format_currency,
+        "Cost per Inbox": _format_currency,
+        "Cost per Lead": _format_currency,
+        "CTR": "{:.2f}%",
+        "CPM": _format_currency,
+        "Frequency": "{:.2f}",
+    }
+
+
+def _format_html_table_value(value, formatter=None):
+    if formatter is None:
+        return "-" if pd.isna(value) else str(value)
+    if callable(formatter):
+        return str(formatter(value))
+    if pd.isna(value):
+        return "-"
+    return formatter.format(value)
+
+
+def _render_dark_html_table(display_df, formatters=None, numeric_columns=None):
+    formatters = formatters or {}
+    numeric_columns = set(numeric_columns or [])
+    display_df = display_df.reset_index(drop=True)
+    header_html = "".join(
+        f"<th>{escape(str(column))}</th>" for column in display_df.columns
+    )
+    row_html = []
+    for _, row in display_df.iterrows():
+        cells = []
+        for column, value in row.items():
+            cell_class = ' class="numeric-cell"' if column in numeric_columns else ""
+            formatted_value = _format_html_table_value(value, formatters.get(column))
+            cells.append(f"<td{cell_class}>{escape(formatted_value)}</td>")
+        row_html.append(f"<tr>{''.join(cells)}</tr>")
+
+    st.markdown(
+        f"""
+        <div class="dark-html-table-wrap">
+            <table class="dark-html-table">
+                <thead><tr>{header_html}</tr></thead>
+                <tbody>{''.join(row_html)}</tbody>
+            </table>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _campaign_table(campaign_df):
     _table_section_title("Campaign Performance")
     _display_separation_note()
@@ -3634,40 +3744,24 @@ def _campaign_table(campaign_df):
     )
     display_df = _blank_non_primary_result_metrics(display_df)
 
-    lead_costs = pd.to_numeric(display_df["Cost per Lead"], errors="coerce")
-    result_costs = pd.to_numeric(display_df["Cost per Result"], errors="coerce")
-    high_cpl = lead_costs[lead_costs.notna()].quantile(0.75)
-    best_cpr = result_costs[display_df["Results"] > 0].quantile(0.25)
-
-    def highlight(row):
-        styles = [""] * len(row)
-        if pd.notna(high_cpl) and pd.notna(row["Cost per Lead"]) and row["Cost per Lead"] >= high_cpl:
-            styles = ["background-color: rgba(251, 146, 60, 0.14); color: #f8fafc"] * len(row)
-        if pd.notna(best_cpr) and row["Results"] > 0 and row["Cost per Result"] <= best_cpr:
-            styles = ["background-color: rgba(52, 211, 153, 0.14); color: #f8fafc"] * len(row)
-        return styles
-
-    styled = (
-        _apply_dark_table_style(display_df.style)
-        .apply(highlight, axis=1)
-        .format(
-            {
-                "Spend": _format_currency,
-                "Results": "{:,.0f}",
-                "Inbox Messages": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
-                "Leads": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
-                "Contacts": "{:,.0f}",
-                "Cost per Contact": _format_currency,
-                "Cost per Result": _format_currency,
-                "Cost per Inbox": _format_currency,
-                "Cost per Lead": _format_currency,
-                "CTR": "{:.2f}%",
-                "CPM": _format_currency,
-                "Frequency": "{:.2f}",
-            }
-        )
+    _render_dark_html_table(
+        display_df,
+        formatters=_performance_table_formatters(),
+        numeric_columns=[
+            "Spend",
+            "Results",
+            "Inbox Messages",
+            "Leads",
+            "Contacts",
+            "Cost per Contact",
+            "Cost per Result",
+            "Cost per Inbox",
+            "Cost per Lead",
+            "CTR",
+            "CPM",
+            "Frequency",
+        ],
     )
-    st.dataframe(styled, use_container_width=True, hide_index=True, height=360)
 
 
 def _adset_table(adset_df):
@@ -3676,23 +3770,24 @@ def _adset_table(adset_df):
     _display_separation_note()
     adset_df = _ensure_adset_contact_metrics(adset_df)
     display_df = _adset_display_df(adset_df).reset_index(drop=True)
-    styled = _apply_dark_table_style(display_df.style).format(
-        {
-            "Spend": _format_currency,
-            "Results": "{:,.0f}",
-            "Inbox Messages": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
-            "Leads": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
-            "Contacts": "{:,.0f}",
-            "Cost per Contact": _format_currency,
-            "Cost per Result": _format_currency,
-            "Cost per Inbox": _format_currency,
-            "Cost per Lead": _format_currency,
-            "CTR": "{:.2f}%",
-            "CPM": _format_currency,
-            "Frequency": "{:.2f}",
-        }
+    _render_dark_html_table(
+        display_df,
+        formatters=_performance_table_formatters(),
+        numeric_columns=[
+            "Spend",
+            "Results",
+            "Inbox Messages",
+            "Leads",
+            "Contacts",
+            "Cost per Contact",
+            "Cost per Result",
+            "Cost per Inbox",
+            "Cost per Lead",
+            "CTR",
+            "CPM",
+            "Frequency",
+        ],
     )
-    st.dataframe(styled, use_container_width=True, hide_index=True, height=360)
 
 
 def _top_level_filters(ads_df):
@@ -4226,23 +4321,24 @@ def _project_performance(project_df):
     )
     display_df = display_df.reset_index(drop=True)
     display_df = _blank_non_primary_result_metrics(display_df)
-    styled = _apply_dark_table_style(display_df.style).format(
-        {
-            "Spend": _format_currency,
-            "Results": "{:,.0f}",
-            "Inbox Messages": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
-            "Leads": lambda value: "-" if pd.isna(value) else f"{value:,.0f}",
-            "Contacts": "{:,.0f}",
-            "Cost per Contact": _format_currency,
-            "Cost per Result": _format_currency,
-            "Cost per Inbox": _format_currency,
-            "Cost per Lead": _format_currency,
-            "CTR": "{:.2f}%",
-            "CPM": _format_currency,
-            "Frequency": "{:.2f}",
-        }
+    _render_dark_html_table(
+        display_df,
+        formatters=_performance_table_formatters(),
+        numeric_columns=[
+            "Spend",
+            "Results",
+            "Inbox Messages",
+            "Leads",
+            "Contacts",
+            "Cost per Contact",
+            "Cost per Result",
+            "Cost per Inbox",
+            "Cost per Lead",
+            "CTR",
+            "CPM",
+            "Frequency",
+        ],
     )
-    st.dataframe(styled, use_container_width=True, hide_index=True, height=360)
 
     chart_columns = st.columns(2)
     inbox_df = project_df[project_df["primary_result_type"] == "Inbox"].sort_values(
@@ -4677,6 +4773,56 @@ def _debug_matching_diagnostics(ads_df, pipeline_project_df, pipeline_adset_df, 
         _pipeline_adsets_debug(pipeline_adset_df, adset_df)
 
 
+def _pipeline_joined_rows(adset_df):
+    if adset_df.empty or "total_contacts" not in adset_df.columns:
+        return 0
+    contacts = pd.to_numeric(adset_df["total_contacts"], errors="coerce").fillna(0)
+    return int((contacts > 0).sum())
+
+
+def _pipeline_join_warning_reason(has_meta_report, pipeline_df, pipeline_filtered_df, pipeline_adset_df, adset_df):
+    if not has_meta_report:
+        return "no Meta report"
+    if not pipeline_df.empty and pipeline_filtered_df.empty:
+        return "no date overlap"
+    match_details = adset_df.attrs.get("pipeline_adset_match_details", {}) if not adset_df.empty else {}
+    exact_df = match_details.get("exact", pd.DataFrame())
+    token_df = match_details.get("token", match_details.get("fallback", pd.DataFrame()))
+    has_matches = (
+        not exact_df.empty
+        or not token_df.empty
+        or _pipeline_joined_rows(adset_df) > 0
+    )
+    if not pipeline_adset_df.empty and not has_matches:
+        return "no adset key matches"
+    return "no adset key matches"
+
+
+def _render_pipeline_sidebar_status(
+    pipeline_df,
+    pipeline_filtered_df,
+    has_meta_report,
+    adset_df=None,
+    pipeline_adset_df=None,
+):
+    st.sidebar.caption(f"Pipeline rows uploaded: {len(pipeline_df):,}")
+    st.sidebar.caption(f"Pipeline rows in selected date range: {len(pipeline_filtered_df):,}")
+    joined_rows = _pipeline_joined_rows(adset_df) if adset_df is not None else 0
+    pipeline_available = not pipeline_df.empty
+    pipeline_joined = has_meta_report and pipeline_available and joined_rows > 0
+    st.sidebar.caption(f"Pipeline joined: {'yes' if pipeline_joined else 'no'}")
+    if not pipeline_available or pipeline_joined:
+        return
+    reason = _pipeline_join_warning_reason(
+        has_meta_report,
+        pipeline_df,
+        pipeline_filtered_df,
+        pipeline_adset_df if pipeline_adset_df is not None else pd.DataFrame(),
+        adset_df if adset_df is not None else pd.DataFrame(),
+    )
+    st.sidebar.warning(f"Pipeline joined rows = 0: {reason}.")
+
+
 def main():
     st.set_page_config(page_title="Real Estate Meta Ads Dashboard", layout="wide")
     st.session_state.setdefault(STATE_SIDEBAR_OPEN, True)
@@ -4801,6 +4947,11 @@ def main():
         if STATE_ADS_DF not in st.session_state:
             _header(initial_label, status="Awaiting report", updated_at="-")
             if pipeline_upload_present or not pipeline_df.empty:
+                _render_pipeline_sidebar_status(
+                    pipeline_df,
+                    pipeline_filtered_df,
+                    has_meta_report=False,
+                )
                 st.info("Pipeline loaded. Click Generate Report to join with Meta data.")
             else:
                 st.info("Choose a date range or preset, then click Generate Report.")
@@ -4929,6 +5080,13 @@ def main():
     adset_df = _clear_non_primary_adset_contacts(adset_df)
     campaign_df = _join_adset_contacts_to_campaign(campaign_df, adset_df)
     project_df = _join_campaign_contacts_to_project(project_df, campaign_df)
+    _render_pipeline_sidebar_status(
+        pipeline_df,
+        pipeline_filtered_df,
+        has_meta_report=True,
+        adset_df=adset_df,
+        pipeline_adset_df=pipeline_adset_df,
+    )
     creative_df = creative_summary(filtered_df)
     all_daily_df = daily_summary(filtered_df)
 
