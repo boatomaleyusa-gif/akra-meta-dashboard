@@ -1538,6 +1538,7 @@ def _load_pipeline_upload(uploaded_file):
     if uploaded_file is None:
         return pd.DataFrame()
     file_name = getattr(uploaded_file, "name", "")
+    print("PIPELINE_UPLOAD_RECEIVED", file_name)
     extension = Path(file_name).suffix.lower()
     if extension not in {".csv", ".xlsx", ".xls"}:
         st.sidebar.warning(
@@ -1599,6 +1600,7 @@ def _load_pipeline_upload(uploaded_file):
     pipeline_df["adset_key"] = pipeline_df.apply(_pipeline_adset_join_key, axis=1)
     if legacy_html_export:
         st.sidebar.info("Loaded legacy HTML Excel export")
+    print("PIPELINE_PARSE_OK", len(pipeline_df))
     return pipeline_df
 
 
@@ -2151,6 +2153,7 @@ def _normalize_pipeline_date_text(value):
 
 def _filter_pipeline_by_date_range(pipeline_df, date_from, date_to):
     if pipeline_df.empty:
+        print("PIPELINE_DATE_FILTER", 0)
         return pipeline_df.copy()
 
     filtered_df = pipeline_df.copy()
@@ -2168,6 +2171,7 @@ def _filter_pipeline_by_date_range(pipeline_df, date_from, date_to):
         & (parsed_dates >= start_date)
         & (parsed_dates <= end_date)
     ].copy()
+    print("PIPELINE_DATE_FILTER", len(filtered_df))
     return filtered_df
 
 
@@ -5459,8 +5463,18 @@ def main():
     adset_df = _dashboard_adset_summary(filtered_df, sort_by)
     adset_df = _join_pipeline_adset_data(adset_df, pipeline_adset_df)
     adset_df = _clear_non_primary_adset_contacts(adset_df)
+    joined_contact_total = int(
+        pd.to_numeric(
+            adset_df.get("total_contacts", pd.Series(dtype=float)),
+            errors="coerce",
+        )
+        .fillna(0)
+        .sum()
+    )
+    print("PIPELINE_JOIN_OK", joined_contact_total, _matched_adsets_count(adset_df))
     campaign_df = _join_adset_contacts_to_campaign(campaign_df, adset_df)
     project_df = _join_campaign_contacts_to_project(project_df, campaign_df)
+    print("RENDERED_CONTACTS_TOTAL", _rendered_contacts_total(project_df))
     _render_pipeline_sidebar_status(
         pipeline_df,
         pipeline_filtered_df,
