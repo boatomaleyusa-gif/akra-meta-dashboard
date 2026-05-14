@@ -17,6 +17,7 @@ APP_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_DIR
 DATA_PATH = PROJECT_ROOT / "data" / "sample_ads.csv"
 FILE_CACHE_PATH = PROJECT_ROOT / "data" / "cache" / "latest_ads.parquet"
+PIPELINE_CACHE_PATH = PROJECT_ROOT / "data" / "cache" / "latest_pipeline.parquet"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
@@ -177,6 +178,7 @@ STATE_SIDEBAR_OPEN = "sidebar_open"
 STATE_PIPELINE_DF = "pipeline_df"
 STATE_PIPELINE_UPLOAD_SIGNATURE = "pipeline_upload_signature"
 STATE_PIPELINE_UPLOAD_MESSAGE = "pipeline_upload_message"
+STATE_PIPELINE_METADATA = "pipeline_metadata"
 META_CACHE_TTL_SECONDS = 30 * 60
 
 
@@ -1607,6 +1609,57 @@ def _pipeline_upload_signature(uploaded_file):
     file_size = len(file_bytes)
     checksum = hashlib.md5(file_bytes).hexdigest() if file_bytes else ""
     return f"{file_name}:{file_size}:{checksum}"
+
+
+def _pipeline_upload_metadata(uploaded_file, pipeline_df, signature):
+    return {
+        "file_name": getattr(uploaded_file, "name", ""),
+        "row_count": int(len(pipeline_df)),
+        "parsed_at": datetime.utcnow().isoformat(timespec="seconds"),
+        "signature": signature,
+        "source": "Uploaded Session",
+    }
+
+
+def _save_pipeline_cache(pipeline_df, metadata=None):
+    try:
+        PIPELINE_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        pipeline_df.to_parquet(PIPELINE_CACHE_PATH, index=False)
+    except Exception as error:
+        print(f"Pipeline cache save failed: {error.__class__.__name__}", flush=True)
+
+
+def _load_pipeline_cache():
+    if not PIPELINE_CACHE_PATH.exists():
+        return None
+    try:
+        pipeline_df = pd.read_parquet(PIPELINE_CACHE_PATH)
+    except Exception as error:
+        print(f"Pipeline cache load failed: {error.__class__.__name__}", flush=True)
+        return None
+    return pipeline_df
+
+
+def _restore_pipeline_cache_to_session():
+    if STATE_PIPELINE_DF in st.session_state:
+        return False
+    pipeline_df = _load_pipeline_cache()
+    if pipeline_df is None:
+        return False
+    st.session_state[STATE_PIPELINE_DF] = pipeline_df
+    st.session_state[STATE_PIPELINE_METADATA] = {
+        "file_name": PIPELINE_CACHE_PATH.name,
+        "row_count": int(len(pipeline_df)),
+        "parsed_at": datetime.utcfromtimestamp(
+            PIPELINE_CACHE_PATH.stat().st_mtime
+        ).isoformat(timespec="seconds"),
+        "signature": f"{PIPELINE_CACHE_PATH.name}:{PIPELINE_CACHE_PATH.stat().st_size}",
+        "source": "Cached Pipeline File",
+    }
+    st.session_state[STATE_PIPELINE_UPLOAD_SIGNATURE] = st.session_state[
+        STATE_PIPELINE_METADATA
+    ]["signature"]
+    return True
 
 
 def _is_organic_pipeline_row(row):
@@ -4780,11 +4833,28 @@ def _pipeline_joined_rows(adset_df):
     return int((contacts > 0).sum())
 
 
-def _pipeline_join_warning_reason(has_meta_report, pipeline_df, pipeline_filtered_df, pipeline_adset_df, adset_df):
+def _matched_adsets_count(adset_df):
+    if adset_df.empty:
+        return 0
+    match_details = adset_df.attrs.get("pipeline_adset_match_details", {})
+    exact_df = match_details.get("exact", pd.DataFrame())
+    token_df = match_details.get("token", match_details.get("fallback", pd.DataFrame()))
+    matched_names = []
+    for match_df in [exact_df, token_df]:
+        if not match_df.empty and "adset" in match_df.columns:
+            matched_names.extend(match_df["adset"].dropna().astype(str).tolist())
+    if matched_names:
+        return len(set(matched_names))
+    return _pipeline_joined_rows(adset_df)
+
+
+def _pipeline_join_warning_reason(has_pipeline_session, has_meta_report, pipeline_df, pipeline_filtered_df, pipeline_adset_df, adset_df):
+    if not has_pipeline_session:
+        return "no pipeline_df in session"
     if not has_meta_report:
-        return "no Meta report"
+        return "no Meta report loaded"
     if not pipeline_df.empty and pipeline_filtered_df.empty:
-        return "no date overlap"
+        return "no selected date overlap"
     match_details = adset_df.attrs.get("pipeline_adset_match_details", {}) if not adset_df.empty else {}
     exact_df = match_details.get("exact", pd.DataFrame())
     token_df = match_details.get("token", match_details.get("fallback", pd.DataFrame()))
@@ -4794,8 +4864,8 @@ def _pipeline_join_warning_reason(has_meta_report, pipeline_df, pipeline_filtere
         or _pipeline_joined_rows(adset_df) > 0
     )
     if not pipeline_adset_df.empty and not has_matches:
-        return "no adset key matches"
-    return "no adset key matches"
+        return "no matching adset keys"
+    return "no matching adset keys"
 
 
 def _render_pipeline_sidebar_status(
@@ -4805,15 +4875,25 @@ def _render_pipeline_sidebar_status(
     adset_df=None,
     pipeline_adset_df=None,
 ):
+    has_pipeline_session = STATE_PIPELINE_DF in st.session_state
+    pipeline_metadata = st.session_state.get(STATE_PIPELINE_METADATA, {})
+    pipeline_uploaded = bool(has_pipeline_session and not pipeline_df.empty)
+    pipeline_source = pipeline_metadata.get("source") if pipeline_uploaded else "Not Loaded"
+    st.sidebar.caption(f"Pipeline source: {pipeline_source}")
+    if pipeline_metadata.get("file_name"):
+        st.sidebar.caption(f"Pipeline file: {pipeline_metadata['file_name']}")
+    st.sidebar.caption(f"Pipeline uploaded: {'yes' if pipeline_uploaded else 'no'}")
     st.sidebar.caption(f"Pipeline rows uploaded: {len(pipeline_df):,}")
     st.sidebar.caption(f"Pipeline rows in selected date range: {len(pipeline_filtered_df):,}")
     joined_rows = _pipeline_joined_rows(adset_df) if adset_df is not None else 0
-    pipeline_available = not pipeline_df.empty
-    pipeline_joined = has_meta_report and pipeline_available and joined_rows > 0
+    matched_adsets = _matched_adsets_count(adset_df) if adset_df is not None else 0
+    pipeline_joined = has_meta_report and pipeline_uploaded and joined_rows > 0
     st.sidebar.caption(f"Pipeline joined: {'yes' if pipeline_joined else 'no'}")
-    if not pipeline_available or pipeline_joined:
+    st.sidebar.caption(f"Matched adsets count: {matched_adsets:,}")
+    if not has_pipeline_session or pipeline_joined:
         return
     reason = _pipeline_join_warning_reason(
+        has_pipeline_session,
         has_meta_report,
         pipeline_df,
         pipeline_filtered_df,
@@ -4875,6 +4955,17 @@ def main():
                 st.session_state.pop(STATE_REPORT_UPDATED_AT, None)
                 st.session_state[STATE_CACHE_STATUS] = "Cache cleared"
                 st.success("Meta data cache cleared. Click Generate Report to fetch again.")
+            if st.button("Clear cached pipeline data", use_container_width=True, key="clear_cached_pipeline_data"):
+                st.session_state.pop(STATE_PIPELINE_DF, None)
+                st.session_state.pop(STATE_PIPELINE_UPLOAD_SIGNATURE, None)
+                st.session_state.pop(STATE_PIPELINE_UPLOAD_MESSAGE, None)
+                st.session_state.pop(STATE_PIPELINE_METADATA, None)
+                try:
+                    PIPELINE_CACHE_PATH.unlink(missing_ok=True)
+                except Exception as error:
+                    st.warning(f"Pipeline cache could not be cleared: {error}")
+                else:
+                    st.success("Pipeline cache cleared.")
             generate = st.button(
                 "Generate Report", type="primary", use_container_width=True, key="generate_report"
             )
@@ -4892,6 +4983,7 @@ def main():
     restored_file_cache = False
     if not generate and STATE_ADS_DF not in st.session_state:
         restored_file_cache = _restore_file_cache_to_session()
+    _restore_pipeline_cache_to_session()
 
     pipeline_upload_present = pipeline_upload is not None
     pipeline_upload_signature = _pipeline_upload_signature(pipeline_upload)
@@ -4910,11 +5002,19 @@ def main():
             if not pipeline_df.empty:
                 st.session_state[STATE_PIPELINE_DF] = pipeline_df
                 st.session_state[STATE_PIPELINE_UPLOAD_SIGNATURE] = pipeline_upload_signature
+                st.session_state[STATE_PIPELINE_METADATA] = _pipeline_upload_metadata(
+                    pipeline_upload,
+                    pipeline_df,
+                    pipeline_upload_signature,
+                )
+                _save_pipeline_cache(
+                    pipeline_df,
+                    st.session_state[STATE_PIPELINE_METADATA],
+                )
                 if STATE_ADS_DF in st.session_state:
                     st.session_state[STATE_PIPELINE_UPLOAD_MESSAGE] = (
                         "Pipeline data loaded and joined with current report."
                     )
-                    st.rerun()
                 else:
                     st.session_state[STATE_PIPELINE_UPLOAD_MESSAGE] = (
                         "Pipeline loaded. Click Generate Report to join with Meta data."
