@@ -7,18 +7,19 @@ def _dark_chart(fig):
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font={"color": "#f8fafc", "family": "Inter, Arial, sans-serif"},
-        title={"font": {"color": "#f8fafc", "size": 18}},
+        font={"color": "#f8fafc", "family": 'Inter, "Segoe UI", system-ui, sans-serif', "size": 13},
+        title={"font": {"color": "#f8fafc", "size": 18, "family": 'Inter, "Segoe UI", system-ui, sans-serif'}},
         legend={
             "bgcolor": "rgba(17,24,39,0.72)",
             "bordercolor": "#334155",
             "borderwidth": 1,
-            "font": {"color": "#cbd5e1"},
+            "font": {"color": "#cbd5e1", "size": 11},
+            "itemsizing": "constant",
         },
         hoverlabel={
             "bgcolor": "#111827",
             "bordercolor": "#334155",
-            "font": {"color": "#f8fafc"},
+            "font": {"color": "#f8fafc", "size": 12},
         },
         colorway=[
             "#22d3ee",

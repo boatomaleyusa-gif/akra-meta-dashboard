@@ -181,6 +181,12 @@ def _format_currency(value):
     return f"฿{value:,.2f}"
 
 
+def _format_baht_number(value):
+    if pd.isna(value):
+        return "-"
+    return f"{value:,.2f}"
+
+
 def _format_number(value):
     return f"{value:,.0f}"
 
@@ -565,24 +571,393 @@ def _styles(dark_theme=True):
         """,
         unsafe_allow_html=True,
     )
+    st.markdown(
+        """
+        <style>
+            :root {
+                --bg: #0b1220;
+                --bg-soft: #0f172a;
+                --panel: #111827;
+                --panel-2: #1e293b;
+                --border: #334155;
+                --text: #f8fafc;
+                --muted: #94a3b8;
+                --cyan: #22d3ee;
+                --blue: #60a5fa;
+                --green: #34d399;
+                --orange: #fb923c;
+                --shadow: 0 20px 54px rgba(2, 6, 23, 0.42);
+            }
+            #MainMenu, footer, header[data-testid="stHeader"] {
+                visibility: hidden;
+                height: 0;
+            }
+            .stApp, html, body, [data-testid="stAppViewContainer"] {
+                background:
+                    radial-gradient(circle at 18% 0%, rgba(34, 211, 238, 0.08), transparent 25%),
+                    linear-gradient(180deg, var(--bg) 0%, var(--bg-soft) 100%) !important;
+                color: var(--text) !important;
+                font-family: Inter, "Segoe UI", system-ui, sans-serif !important;
+                font-size: 14px;
+            }
+            * {
+                font-family: Inter, "Segoe UI", system-ui, sans-serif !important;
+                letter-spacing: 0;
+            }
+            .block-container {
+                max-width: 1600px;
+                padding: 1rem 1.7rem 2.5rem;
+            }
+            [data-testid="stSidebar"] {
+                background: linear-gradient(180deg, #070d19 0%, #0b1120 100%) !important;
+                border-right: 1px solid var(--border);
+                box-shadow: 18px 0 36px rgba(2, 6, 23, 0.32);
+            }
+            [data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
+            [data-testid="stSidebar"] label,
+            [data-testid="stSidebar"] span,
+            [data-testid="stSidebar"] p {
+                color: var(--muted) !important;
+                font-size: 13px !important;
+                font-weight: 500 !important;
+            }
+            [data-testid="stSidebar"] h1,
+            [data-testid="stSidebar"] h2,
+            [data-testid="stSidebar"] h3 {
+                color: var(--text) !important;
+                font-size: 18px !important;
+                font-weight: 700 !important;
+                letter-spacing: 0;
+            }
+            [data-testid="stSidebar"] [data-baseweb="select"] > div,
+            [data-testid="stSidebar"] input,
+            [data-testid="stSidebar"] textarea,
+            [data-testid="stSidebar"] [data-baseweb="input"] {
+                background: var(--panel) !important;
+                border-color: var(--border) !important;
+                border-radius: 8px !important;
+                color: var(--text) !important;
+                font-size: 13px !important;
+            }
+            [data-testid="stFileUploader"] {
+                background: rgba(17, 24, 39, 0.88);
+                border: 1px dashed #475569;
+                border-radius: 8px;
+                padding: 12px;
+            }
+            div.stButton > button,
+            [data-testid="stDownloadButton"] button {
+                background: linear-gradient(135deg, #1d4ed8, #0891b2) !important;
+                border: 1px solid rgba(96, 165, 250, 0.55) !important;
+                border-radius: 8px !important;
+                color: var(--text) !important;
+                font-weight: 700 !important;
+                min-height: 40px;
+                box-shadow: 0 12px 30px rgba(14, 165, 233, 0.18);
+            }
+            .exec-header,
+            .kpi-card,
+            .decision-card,
+            .note-card,
+            .insight-group,
+            .creative-row,
+            div[data-testid="stDataFrame"],
+            [data-testid="stPlotlyChart"] {
+                background: linear-gradient(180deg, rgba(17, 24, 39, 0.96), rgba(15, 23, 42, 0.98)) !important;
+                border: 1px solid var(--border) !important;
+                border-radius: 8px !important;
+                box-shadow: var(--shadow) !important;
+                color: var(--text) !important;
+            }
+            .exec-header {
+                background:
+                    radial-gradient(circle at 12% 0%, rgba(34, 211, 238, 0.18), transparent 28%),
+                    linear-gradient(135deg, #0f172a 0%, #111827 58%, #0b1120 100%) !important;
+                padding: 22px 24px !important;
+                margin-bottom: 16px !important;
+            }
+            .exec-header h1 {
+                font-size: 30px !important;
+                line-height: 1.15 !important;
+                font-weight: 700 !important;
+                letter-spacing: 0 !important;
+            }
+            .subtitle {
+                font-size: 14px !important;
+                line-height: 1.45 !important;
+                font-weight: 500 !important;
+            }
+            .dashboard-header-row {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 22px;
+            }
+            .header-badges {
+                display: flex;
+                flex-wrap: wrap;
+                justify-content: flex-end;
+                gap: 8px;
+                max-width: 760px;
+            }
+            .header-pill {
+                min-height: 36px;
+                display: inline-flex;
+                align-items: center;
+                gap: 7px;
+                white-space: nowrap;
+                color: var(--muted);
+                background: rgba(30, 41, 59, 0.72);
+                border: 1px solid var(--border);
+                border-radius: 999px;
+                padding: 8px 12px;
+                font-size: 12px;
+                font-weight: 600;
+                line-height: 1;
+            }
+            .header-pill span {
+                color: var(--muted);
+                font-size: 11px;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+            }
+            .header-pill strong {
+                color: var(--text);
+                font-size: 12px;
+                font-weight: 700;
+            }
+            .data-source-pill {
+                border-color: rgba(96, 165, 250, 0.48);
+                background: rgba(37, 99, 235, 0.16);
+            }
+            .data-source-pill strong {
+                color: var(--cyan);
+            }
+            .section-title {
+                color: var(--text) !important;
+                font-size: 20px;
+                font-weight: 700;
+                margin: 16px 0 8px;
+                padding-left: 12px;
+                border-left: 3px solid var(--cyan);
+            }
+            .table-title-bar {
+                margin: 14px 0 0;
+                padding: 11px 14px;
+                background: linear-gradient(180deg, rgba(17, 24, 39, 0.98), rgba(15, 23, 42, 0.98));
+                border: 1px solid var(--border);
+                border-bottom: 0;
+                border-radius: 8px 8px 0 0;
+                color: var(--text);
+                font-size: 15px;
+                font-weight: 700;
+                letter-spacing: 0;
+            }
+            .table-title-bar + div[data-testid="stDataFrame"] {
+                border-top-left-radius: 0 !important;
+                border-top-right-radius: 0 !important;
+            }
+            .brand { color: var(--cyan) !important; }
+            .subtitle,
+            .date-range,
+            .kpi-group,
+            .kpi-label,
+            .decision-label,
+            .decision-detail,
+            .insight-copy,
+            .creative-campaign,
+            .row-label {
+                color: var(--muted) !important;
+            }
+            .date-range {
+                background: rgba(30, 41, 59, 0.78) !important;
+                border: 1px solid var(--border);
+                border-radius: 8px;
+            }
+            .kpi-card {
+                position: relative;
+                min-height: 132px;
+                padding: 18px 18px !important;
+                overflow: hidden;
+            }
+            .kpi-card::before {
+                content: "";
+                position: absolute;
+                inset: 0 auto 0 0;
+                width: 3px;
+                background: var(--blue);
+            }
+            .kpi-card.accent-leads::before { background: var(--cyan); }
+            .kpi-card.accent-inbox::before { background: var(--blue); }
+            .kpi-card.accent-contacts::before { background: var(--green); }
+            .kpi-card.accent-cpl::before { background: var(--orange); }
+            .kpi-icon {
+                width: 34px;
+                height: 34px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 8px;
+                background: rgba(30, 41, 59, 0.9);
+                border: 1px solid var(--border);
+                color: var(--cyan);
+                font-size: 15px;
+                font-weight: 700;
+            }
+            .kpi-topline {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 10px;
+            }
+            .kpi-value,
+            .decision-value,
+            .insight-heading,
+            .insight-name,
+            .creative-title,
+            .creative-title a,
+            .row-value {
+                color: var(--text) !important;
+            }
+            .kpi-value {
+                font-size: 32px;
+                line-height: 1.08;
+                font-weight: 700;
+                letter-spacing: 0;
+                margin-top: 8px;
+            }
+            .kpi-label,
+            .kpi-group,
+            .decision-label,
+            .row-label {
+                font-size: 11px !important;
+                line-height: 1.2;
+                font-weight: 700 !important;
+                text-transform: uppercase;
+                letter-spacing: 0.06em !important;
+            }
+            .decision-detail,
+            .insight-copy,
+            .creative-campaign {
+                font-size: 13px !important;
+                line-height: 1.45;
+                font-weight: 500 !important;
+            }
+            .decision-value,
+            .insight-heading,
+            .insight-name,
+            .creative-title {
+                font-weight: 700 !important;
+            }
+            .card-grid {
+                grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)) !important;
+                gap: 14px !important;
+                margin-bottom: 12px !important;
+            }
+            [data-testid="stPlotlyChart"] {
+                padding: 10px;
+                margin-bottom: 10px;
+            }
+            .empty-chart-card {
+                min-height: 380px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+                background: linear-gradient(180deg, rgba(17, 24, 39, 0.96), rgba(15, 23, 42, 0.98));
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                box-shadow: var(--shadow);
+                color: var(--muted);
+                font-weight: 800;
+                padding: 18px;
+            }
+            div[data-testid="stDataFrame"] {
+                background: var(--panel-2) !important;
+                overflow: hidden;
+            }
+            div[data-testid="stDataFrame"] div[role="grid"] {
+                color: var(--text) !important;
+                font-size: 12.5px !important;
+                font-weight: 400 !important;
+            }
+            div[data-testid="stDataFrame"] [role="columnheader"] {
+                background: #0f172a !important;
+                color: var(--text) !important;
+                border-bottom: 1px solid var(--border) !important;
+                position: sticky;
+                top: 0;
+                z-index: 2;
+                font-size: 12px !important;
+                font-weight: 650 !important;
+            }
+            div[data-testid="stDataFrame"] [role="gridcell"] {
+                font-size: 12.5px !important;
+                font-weight: 400 !important;
+            }
+            div[data-testid="stDataFrame"] [role="row"]:nth-child(even) {
+                background: rgba(15, 23, 42, 0.46) !important;
+            }
+            div[data-testid="stDataFrame"] [role="row"]:hover {
+                background: rgba(34, 211, 238, 0.08) !important;
+            }
+            .badge-good { background: rgba(16, 185, 129, 0.16); color: var(--green); }
+            .badge-watch { background: rgba(251, 146, 60, 0.16); color: var(--orange); }
+            .badge-risk { background: rgba(248, 113, 113, 0.16); color: #f87171; }
+            .badge-action { background: rgba(96, 165, 250, 0.16); color: var(--blue); }
+            .note-card { border-left: 4px solid var(--blue) !important; }
+            .note-card.warning { border-left-color: var(--orange) !important; }
+            .note-card.risk { border-left-color: #f87171 !important; }
+            .note-card.ok { border-left-color: var(--green) !important; }
+            .no-preview {
+                background: var(--panel-2) !important;
+                color: var(--muted) !important;
+                border: 1px solid var(--border);
+                border-radius: 8px !important;
+            }
+            [data-testid="stAlert"] {
+                background: var(--panel) !important;
+                color: var(--text) !important;
+                border: 1px solid var(--border) !important;
+                border-radius: 8px !important;
+            }
+            @media (max-width: 900px) {
+                .dashboard-header-row {
+                    flex-direction: column;
+                }
+                .header-badges {
+                    justify-content: flex-start;
+                    min-width: 0;
+                }
+                .block-container {
+                    padding-left: 1rem;
+                    padding-right: 1rem;
+                }
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _apply_plotly_dark_theme(fig):
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font={"color": "#f8fafc", "family": "Inter, Arial, sans-serif"},
-        title={"font": {"color": "#f8fafc", "size": 18}},
+        font={"color": "#f8fafc", "family": 'Inter, "Segoe UI", system-ui, sans-serif', "size": 13},
+        title={"font": {"color": "#f8fafc", "size": 18, "family": 'Inter, "Segoe UI", system-ui, sans-serif'}},
         legend={
             "bgcolor": "rgba(17,24,39,0.72)",
             "bordercolor": "#334155",
             "borderwidth": 1,
-            "font": {"color": "#cbd5e1"},
+            "font": {"color": "#cbd5e1", "size": 11},
+            "itemsizing": "constant",
         },
         hoverlabel={
             "bgcolor": "#111827",
             "bordercolor": "#334155",
-            "font": {"color": "#f8fafc"},
+            "font": {"color": "#f8fafc", "size": 12},
         },
         colorway=[
             "#22d3ee",
@@ -615,232 +990,6 @@ def _apply_plotly_dark_theme(fig):
 
 def _render_plotly_chart(container, fig):
     container.plotly_chart(_apply_plotly_dark_theme(fig), use_container_width=True)
-    st.markdown(
-        """
-        <style>
-            :root {
-                --bg: #0f172a;
-                --panel: #111827;
-                --table: #1e293b;
-                --border: #334155;
-                --text: #f8fafc;
-                --muted: #94a3b8;
-                --cyan: #22d3ee;
-                --blue: #60a5fa;
-                --green: #34d399;
-                --orange: #fb923c;
-                --shadow: 0 20px 48px rgba(2, 6, 23, 0.36);
-            }
-            html, body, [data-testid="stAppViewContainer"] {
-                background: var(--bg) !important;
-                color: var(--text) !important;
-            }
-            .block-container {
-                padding-top: 1rem;
-                max-width: 1500px;
-            }
-            [data-testid="stSidebar"] {
-                background: #0b1120 !important;
-                border-right: 1px solid var(--border);
-            }
-            [data-testid="stSidebar"] * {
-                color: var(--text);
-            }
-            [data-testid="stSidebar"] h1,
-            [data-testid="stSidebar"] h2,
-            [data-testid="stSidebar"] h3 {
-                color: var(--text) !important;
-                font-weight: 850;
-            }
-            [data-testid="stSidebar"] label,
-            [data-testid="stSidebar"] p,
-            [data-testid="stSidebar"] span {
-                color: var(--muted);
-            }
-            [data-testid="stSidebar"] [data-baseweb="select"] > div,
-            [data-testid="stSidebar"] input,
-            [data-testid="stSidebar"] textarea {
-                background: #111827 !important;
-                border: 1px solid var(--border) !important;
-                border-radius: 8px !important;
-                color: var(--text) !important;
-            }
-            [data-testid="stFileUploader"] {
-                background: rgba(17, 24, 39, 0.86);
-                border: 1px dashed #475569;
-                border-radius: 8px;
-                padding: 10px;
-            }
-            div.stButton > button,
-            [data-testid="stDownloadButton"] button {
-                background: linear-gradient(135deg, #1d4ed8, #0891b2) !important;
-                border: 1px solid rgba(96, 165, 250, 0.5) !important;
-                border-radius: 8px !important;
-                color: #f8fafc !important;
-                font-weight: 800 !important;
-                box-shadow: 0 10px 26px rgba(14, 165, 233, 0.18);
-            }
-            .exec-header {
-                background:
-                    radial-gradient(circle at 12% 0%, rgba(34, 211, 238, 0.18), transparent 28%),
-                    linear-gradient(135deg, #0f172a 0%, #111827 58%, #0b1120 100%) !important;
-                border: 1px solid var(--border);
-                border-radius: 8px;
-                box-shadow: var(--shadow);
-                color: var(--text);
-            }
-            .brand {
-                color: var(--cyan);
-                letter-spacing: 0.08em;
-            }
-            .subtitle, .date-range {
-                color: var(--muted);
-            }
-            .date-range {
-                background: rgba(30, 41, 59, 0.82);
-                border: 1px solid var(--border);
-                border-radius: 8px;
-            }
-            .section-title {
-                color: var(--text) !important;
-                font-size: 20px;
-                font-weight: 850;
-                margin: 30px 0 12px;
-                padding-left: 12px;
-                border-left: 3px solid var(--cyan);
-            }
-            .card-grid {
-                gap: 16px;
-                margin-bottom: 14px;
-            }
-            .kpi-card, .decision-card, .note-card, .insight-group {
-                background: linear-gradient(180deg, rgba(17, 24, 39, 0.96), rgba(15, 23, 42, 0.96)) !important;
-                border: 1px solid var(--border) !important;
-                border-radius: 8px !important;
-                box-shadow: var(--shadow) !important;
-                color: var(--text) !important;
-            }
-            .kpi-card {
-                position: relative;
-                overflow: hidden;
-                min-height: 138px;
-            }
-            .kpi-card::before {
-                content: "";
-                position: absolute;
-                inset: 0 auto 0 0;
-                width: 3px;
-                background: var(--blue);
-            }
-            .kpi-card.accent-leads::before { background: var(--cyan); }
-            .kpi-card.accent-inbox::before { background: var(--blue); }
-            .kpi-card.accent-contacts::before { background: var(--green); }
-            .kpi-card.accent-cpl::before { background: var(--orange); }
-            .kpi-card.highlight {
-                border-color: rgba(34, 211, 238, 0.6) !important;
-                background: linear-gradient(180deg, rgba(8, 47, 73, 0.8), rgba(17, 24, 39, 0.96)) !important;
-            }
-            .kpi-card.muted {
-                opacity: 0.56;
-                background: #111827 !important;
-            }
-            .kpi-topline {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 10px;
-            }
-            .kpi-icon {
-                width: 34px;
-                height: 34px;
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                border-radius: 8px;
-                background: rgba(30, 41, 59, 0.9);
-                color: var(--cyan);
-                font-size: 17px;
-                border: 1px solid var(--border);
-            }
-            .kpi-group, .kpi-label, .decision-label, .decision-detail, .insight-copy, .creative-campaign, .row-label {
-                color: var(--muted) !important;
-            }
-            .kpi-value, .decision-value, .insight-heading, .insight-name, .creative-title, .creative-title a, .row-value {
-                color: var(--text) !important;
-            }
-            .kpi-value {
-                font-size: 30px;
-                letter-spacing: 0;
-            }
-            .badge-good { background: rgba(16, 185, 129, 0.16); color: var(--green); }
-            .badge-watch { background: rgba(251, 146, 60, 0.16); color: var(--orange); }
-            .badge-risk { background: rgba(248, 113, 113, 0.16); color: #f87171; }
-            .badge-action { background: rgba(96, 165, 250, 0.16); color: var(--blue); }
-            .note-card {
-                border-left: 4px solid var(--blue) !important;
-            }
-            .note-card.warning { border-left-color: var(--orange) !important; }
-            .note-card.risk { border-left-color: #f87171 !important; }
-            .note-card.ok { border-left-color: var(--green) !important; }
-            div[data-testid="stDataFrame"] {
-                background: var(--table);
-                border: 1px solid var(--border);
-                border-radius: 8px;
-                box-shadow: var(--shadow);
-            }
-            [data-testid="stPlotlyChart"] {
-                background: linear-gradient(180deg, rgba(17, 24, 39, 0.96), rgba(15, 23, 42, 0.96));
-                border: 1px solid var(--border);
-                border-radius: 8px;
-                box-shadow: var(--shadow);
-                padding: 12px;
-            }
-            div[data-testid="stDataFrame"] div[role="grid"] {
-                color: var(--text) !important;
-            }
-            div[data-testid="stDataFrame"] [role="columnheader"] {
-                background: #0f172a !important;
-                color: var(--text) !important;
-                border-bottom: 1px solid var(--border) !important;
-                position: sticky;
-                top: 0;
-                z-index: 2;
-            }
-            div[data-testid="stDataFrame"] [role="row"]:nth-child(even) {
-                background: rgba(15, 23, 42, 0.48) !important;
-            }
-            div[data-testid="stDataFrame"] [role="row"]:hover {
-                background: rgba(34, 211, 238, 0.08) !important;
-            }
-            .creative-row {
-                background: linear-gradient(180deg, rgba(17, 24, 39, 0.98), rgba(15, 23, 42, 0.98)) !important;
-                border-color: var(--border) !important;
-                border-radius: 8px !important;
-                box-shadow: 0 12px 32px rgba(2, 6, 23, 0.26) !important;
-            }
-            .creative-row:hover {
-                border-color: rgba(34, 211, 238, 0.5) !important;
-                box-shadow: 0 18px 42px rgba(14, 165, 233, 0.14) !important;
-            }
-            .no-preview {
-                background: #1e293b !important;
-                color: var(--muted) !important;
-                border: 1px solid var(--border);
-                border-radius: 8px !important;
-            }
-            [data-testid="stAlert"] {
-                background: #111827;
-                color: var(--text);
-                border: 1px solid var(--border);
-                border-radius: 8px;
-            }
-            h1, h2, h3, h4, h5, h6, p, span, label {
-                color: inherit;
-            }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 def _load_dashboard_data(use_custom_range, date_from, date_to, preset, raise_rate_limit=False):
@@ -2467,15 +2616,25 @@ def _extract_project(campaign_name, adset_name=""):
     return "Other"
 
 
-def _header(date_range_label):
+def _header(date_range_label, status="Ready", updated_at=""):
     clean_range = escape(date_range_label.replace("Report Date Range: ", "") or "Not generated")
+    clean_status = escape(status or "Ready")
+    clean_updated = escape(updated_at or "-")
     st.markdown(
         f"""
         <div class="exec-header">
-            <div class="brand">Akra Land  House</div>
-            <h1>Real Estate Meta Ads Performance Dashboard</h1>
-            <p class="subtitle">Executive summary for campaign decision-making</p>
-            <div class="date-range">Selected Date Range: {clean_range}</div>
+            <div class="dashboard-header-row">
+                <div>
+                    <div class="brand">AKRA LAND ANALYTICS</div>
+                    <h1>Meta Ads Performance Dashboard</h1>
+                    <p class="subtitle">Pipeline-aware performance view for budget, contact, and creative decisions.</p>
+                </div>
+                <div class="header-badges">
+                    <div class="header-pill"><span>Date Range</span><strong>{clean_range}</strong></div>
+                    <div class="header-pill data-source-pill"><span>Data Source</span><strong>{clean_status}</strong></div>
+                    <div class="header-pill"><span>Updated At</span><strong>{clean_updated}</strong></div>
+                </div>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2538,87 +2697,57 @@ def _card_icon(label):
     return "•"
 
 
-def _kpi_cards(filtered_df):
-    _display_separation_note()
+def _kpi_cards(filtered_df, campaign_df=None):
     total_spend = filtered_df["spend"].sum()
     total_results = filtered_df["results"].sum()
     inbox_df = filtered_df[filtered_df["primary_result_type"] == "Inbox"]
     lead_df = filtered_df[filtered_df["primary_result_type"] == "Lead"]
     total_inbox = inbox_df["inbox_messages"].sum()
     total_leads = lead_df["leads"].sum()
-    total_impressions = filtered_df["impressions"].sum()
-    total_reach = filtered_df["reach"].sum()
-    total_clicks = filtered_df["clicks"].sum()
-    inbox_spend = inbox_df["spend"].sum()
-    lead_spend = lead_df["spend"].sum()
-    classified_spend = inbox_spend + lead_spend
-    inbox_share = _safe_divide(inbox_spend, classified_spend)
-    lead_share = _safe_divide(lead_spend, classified_spend)
-    context = "mixed"
-    if classified_spend > 0 and inbox_share >= 0.7:
-        context = "inbox"
-    elif classified_spend > 0 and lead_share >= 0.7:
-        context = "lead"
-
-    cost_per_inbox_class = "highlight" if context == "inbox" else "muted" if context == "lead" else ""
-    cost_per_lead_class = "highlight" if context == "lead" else "muted" if context == "inbox" else ""
-    cost_per_inbox_detail = "Primary efficiency metric" if context == "inbox" else "Not primary for this selection" if context == "lead" else ""
-    cost_per_lead_detail = "Primary efficiency metric" if context == "lead" else "Not primary for this selection" if context == "inbox" else ""
+    total_contacts = 0
+    if campaign_df is not None and "total_contacts" in campaign_df.columns:
+        total_contacts = pd.to_numeric(
+            campaign_df["total_contacts"], errors="coerce"
+        ).fillna(0).sum()
 
     cards = [
-        {"group": "Efficiency", "label": "Total Spend", "value": _format_currency(total_spend)},
-        {"group": "Efficiency", "label": "Primary Results", "value": _format_number(total_results)},
         {
             "group": "Efficiency",
-            "label": "Cost per Result",
-            "value": _format_currency(_safe_divide(total_spend, total_results)),
+            "label": "Total Spend",
+            "value": _format_currency(total_spend),
+            "icon": "฿",
+        },
+        {
+            "group": "Delivery",
+            "label": "Results",
+            "value": _format_number(total_results),
+            "icon": "R",
+        },
+        {
+            "group": "Messaging",
+            "label": "Inbox Messages",
+            "value": _format_number(total_inbox),
+            "icon": "M",
+        },
+        {
+            "group": "Lead Gen",
+            "label": "Leads",
+            "value": _format_number(total_leads),
+            "icon": "L",
+        },
+        {
+            "group": "Pipeline",
+            "label": "Contacts",
+            "value": _format_number(total_contacts),
+            "icon": "C",
+        },
+        {
+            "group": "Pipeline",
+            "label": "Cost per Contact",
+            "value": _format_currency(_safe_divide(total_spend, total_contacts)),
+            "icon": "฿",
         },
     ]
-    if not inbox_df.empty:
-        cards.extend(
-            [
-                {"group": "Messaging", "label": "Inbox Messages", "value": _format_number(total_inbox)},
-                {
-                    "group": "Messaging",
-                    "label": "Cost per Inbox",
-                    "value": _format_currency(_safe_divide(inbox_spend, total_inbox)),
-                    "class": cost_per_inbox_class,
-                    "detail": cost_per_inbox_detail,
-                },
-            ]
-        )
-    if not lead_df.empty:
-        cards.extend(
-            [
-                {"group": "Lead Generation", "label": "Leads", "value": _format_number(total_leads)},
-                {
-                    "group": "Lead Generation",
-                    "label": "Cost per Lead",
-                    "value": _format_currency(_safe_divide(lead_spend, total_leads)),
-                    "class": cost_per_lead_class,
-                    "detail": cost_per_lead_detail,
-                },
-            ]
-        )
-    cards.extend(
-        [
-        {
-            "group": "Audience Quality",
-            "label": "CTR",
-            "value": _format_percent(_safe_divide(total_clicks, total_impressions) * 100),
-        },
-        {
-            "group": "Audience Quality",
-            "label": "CPM",
-            "value": _format_currency(_safe_divide(total_spend, total_impressions) * 1000),
-        },
-        {
-            "group": "Audience Quality",
-            "label": "Frequency",
-            "value": f"{_safe_divide(total_impressions, total_reach):.2f}",
-        },
-        ]
-    )
     _card_grid(cards)
 
 
@@ -2983,8 +3112,19 @@ def _insight_item_html(insight):
     )
 
 
+def _table_section_title(title):
+    st.markdown(
+        f"""
+        <div class="table-title-bar">
+            <div>{escape(title)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _campaign_table(campaign_df):
-    st.markdown('<div class="section-title">Campaign Performance</div>', unsafe_allow_html=True)
+    _table_section_title("Campaign Performance")
     _display_separation_note()
     sorted_df = campaign_df.sort_values("spend", ascending=False).copy()
 
@@ -3056,11 +3196,11 @@ def _campaign_table(campaign_df):
             }
         )
     )
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.dataframe(styled, use_container_width=True, hide_index=True, height=360)
 
 
 def _adset_table(adset_df):
-    st.markdown('<div class="section-title">Ad Set Performance</div>', unsafe_allow_html=True)
+    _table_section_title("Ad Set Performance")
     st.caption("Only primary result metrics are shown in this table.")
     _display_separation_note()
     adset_df = _ensure_adset_contact_metrics(adset_df)
@@ -3081,7 +3221,7 @@ def _adset_table(adset_df):
             "Frequency": "{:.2f}",
         }
     )
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.dataframe(styled, use_container_width=True, hide_index=True, height=360)
 
 
 def _top_level_filters(ads_df):
@@ -3476,8 +3616,105 @@ def _aggregation_check(filtered_df):
     )
 
 
+def _dashboard_top_chart_row(daily_df, project_df):
+    st.markdown('<div class="section-title">Overview Trends</div>', unsafe_allow_html=True)
+    trend_fig = spend_vs_results_by_day(daily_df)
+    trend_fig.update_layout(height=420)
+    _render_plotly_chart(st, trend_fig)
+
+    project_contacts_df = _project_contact_chart_df(project_df)
+    if project_contacts_df.empty or project_contacts_df["contacts"].sum() <= 0:
+        chart_columns = st.columns(2)
+        _empty_chart_card(chart_columns[0])
+        _empty_chart_card(chart_columns[1])
+        return
+
+    st.markdown('<div class="section-title">Pipeline Contact Efficiency</div>', unsafe_allow_html=True)
+    chart_columns = st.columns(2)
+
+    contacts_fig = px.bar(
+        project_contacts_df.sort_values("contacts", ascending=False).head(10),
+        x="contacts",
+        y="project",
+        orientation="h",
+        color="contacts",
+        title="Contacts by Project",
+        color_continuous_scale=["#1e293b", "#34d399"],
+    )
+    contacts_fig.update_layout(yaxis={"categoryorder": "total ascending"}, height=380)
+    contacts_fig.update_xaxes(title="Contacts")
+    contacts_fig.update_yaxes(title="")
+
+    cpc_df = project_contacts_df[project_contacts_df["contacts"] > 0].copy()
+    cpc_df = cpc_df.sort_values("cost_per_contact", ascending=True).head(10)
+    cpc_df["cost_per_contact_plot"] = (
+        pd.to_numeric(cpc_df["cost_per_contact"], errors="coerce").round(2)
+    )
+    cpc_df["cost_per_contact_display"] = cpc_df["cost_per_contact_plot"].apply(
+        _format_baht_number
+    )
+    cpc_fig = px.bar(
+        cpc_df,
+        x="cost_per_contact_plot",
+        y="project",
+        orientation="h",
+        title="Cost per Contact by Project",
+        custom_data=["cost_per_contact_display", "contacts"],
+    )
+    cpc_fig.update_layout(
+        yaxis={"categoryorder": "total descending"},
+        height=380,
+        showlegend=False,
+    )
+    cpc_fig.update_traces(
+        marker_color="#22d3ee",
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Cost / Contact: ฿%{customdata[0]}<br>"
+            "Contacts: %{customdata[1]:,.0f}<extra></extra>"
+        )
+    )
+    cpc_fig.update_xaxes(title="Cost / Contact", tickformat=",.2f")
+    cpc_fig.update_yaxes(title="")
+
+    _render_plotly_chart(chart_columns[0], contacts_fig)
+    _render_plotly_chart(chart_columns[1], cpc_fig)
+
+
+def _empty_chart_card(container):
+    container.markdown(
+        '<div class="empty-chart-card">Upload pipeline data to view contact charts.</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _project_contact_chart_df(project_df):
+    if project_df.empty or "total_contacts" not in project_df.columns:
+        return pd.DataFrame(columns=["project", "spend", "contacts", "cost_per_contact"])
+
+    chart_df = project_df.copy()
+    chart_df = chart_df[chart_df["primary_result_type"].isin(["Lead", "Inbox"])]
+    chart_df["total_contacts"] = pd.to_numeric(
+        chart_df["total_contacts"], errors="coerce"
+    ).fillna(0)
+    chart_df = (
+        chart_df.groupby("project", as_index=False)
+        .agg(
+            spend=("spend", "sum"),
+            contacts=("total_contacts", "sum"),
+        )
+    )
+    chart_df["cost_per_contact"] = chart_df.apply(
+        lambda row: pd.NA
+        if row["contacts"] <= 0
+        else _safe_divide(row["spend"], row["contacts"]),
+        axis=1,
+    )
+    return chart_df
+
+
 def _project_performance(project_df):
-    st.markdown('<div class="section-title">Project Performance</div>', unsafe_allow_html=True)
+    _table_section_title("Project Performance")
     _display_separation_note()
     project_df = _ensure_project_contact_metrics(project_df)
     if _verify_project_aggregation(project_df):
@@ -3533,7 +3770,7 @@ def _project_performance(project_df):
             "Frequency": "{:.2f}",
         }
     )
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.dataframe(styled, use_container_width=True, hide_index=True, height=360)
 
     chart_columns = st.columns(2)
     inbox_df = project_df[project_df["primary_result_type"] == "Inbox"].sort_values(
@@ -4020,14 +4257,15 @@ def main():
     )
     if restored_file_cache:
         initial_label = st.session_state.get(STATE_DATE_RANGE_LABEL, initial_label)
-    _header(initial_label)
 
     if not generate:
         if STATE_ADS_DF not in st.session_state:
+            _header(initial_label, status="Awaiting report", updated_at="-")
             st.info("Choose a date range or preset, then click Generate Report.")
             return
 
     if generate and use_custom_range and date_from > date_to:
+        _header(initial_label, status="Invalid date range", updated_at="-")
         st.error("META_DATE_FROM must be before or equal to META_DATE_TO.")
         return
 
@@ -4094,6 +4332,13 @@ def main():
         ads_df.attrs["report_updated_at"] = st.session_state.get(STATE_REPORT_UPDATED_AT, "")
 
     if ads_df.empty:
+        _header(
+            ads_df.attrs.get("date_range_label", initial_label),
+            status=st.session_state.get(STATE_CACHE_STATUS, "No data"),
+            updated_at=ads_df.attrs.get(
+                "report_updated_at", st.session_state.get(STATE_REPORT_UPDATED_AT, "")
+            ),
+        )
         _render_sidebar_data_controls(
             cache_status_slot,
             last_updated_slot,
@@ -4121,6 +4366,11 @@ def main():
         report_updated_at=report_updated_at,
     )
     if filtered_df.empty:
+        _header(
+            ads_df.attrs.get("date_range_label", initial_label),
+            status=st.session_state.get(STATE_CACHE_STATUS, "Filtered"),
+            updated_at=report_updated_at,
+        )
         st.warning("No rows match current filters.")
         return
 
@@ -4138,20 +4388,26 @@ def main():
     campaign_df = _join_adset_contacts_to_campaign(campaign_df, adset_df)
     project_df = _join_campaign_contacts_to_project(project_df, campaign_df)
     creative_df = creative_summary(filtered_df)
+    all_daily_df = daily_summary(filtered_df)
 
+    _header(
+        ads_df.attrs.get("date_range_label", initial_label),
+        status=st.session_state.get(STATE_CACHE_STATUS, "Ready"),
+        updated_at=report_updated_at,
+    )
+    _kpi_cards(filtered_df, campaign_df)
+    _dashboard_top_chart_row(all_daily_df, project_df)
+    _project_performance(project_df)
+    _campaign_table(campaign_df)
+    _adset_table(adset_df)
     _decision_summary(campaign_df)
     _executive_action_plan(filtered_df, campaign_df, adset_df, creative_df)
-    st.markdown('<div class="section-title">Executive KPI Overview</div>', unsafe_allow_html=True)
-    _kpi_cards(filtered_df)
     _thai_performance_agency_summary(filtered_df, campaign_df, adset_df, creative_df)
     _aggregation_check(filtered_df)
-    _project_performance(project_df)
     _management_notes(campaign_df)
     _unmapped_campaigns_debug(ads_df)
     _pipeline_projects_debug(pipeline_project_df)
     _pipeline_adsets_debug(pipeline_adset_df, adset_df)
-    _campaign_table(campaign_df)
-    _adset_table(adset_df)
     _charts(lead_daily_df, inbox_daily_df, campaign_df)
     _creative_section(creative_df)
 
