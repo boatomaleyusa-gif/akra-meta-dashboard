@@ -3506,6 +3506,65 @@ def _table_section_title(title):
     )
 
 
+def _dark_table_row_styles(row):
+    row_bg = "#0B1730" if row.name % 2 else "#071225"
+    return [
+        (
+            f"background-color: {row_bg}; "
+            "color: #E6EDF7; "
+            "border: 1px solid #1E293B; "
+            "padding: 8px 10px;"
+        )
+        for _ in row
+    ]
+
+
+def _dark_table_header_styles():
+    return [
+        {
+            "selector": "thead th",
+            "props": [
+                ("background-color", "#0F172A"),
+                ("color", "#7DD3FC"),
+                ("border", "1px solid #1E293B"),
+                ("padding", "9px 10px"),
+                ("font-weight", "700"),
+                ("text-align", "left"),
+            ],
+        },
+        {
+            "selector": "tbody td",
+            "props": [
+                ("color", "#E6EDF7"),
+                ("border", "1px solid #1E293B"),
+                ("padding", "8px 10px"),
+            ],
+        },
+        {
+            "selector": "tbody tr:hover td",
+            "props": [
+                ("background-color", "#13203A"),
+                ("color", "#E6EDF7"),
+            ],
+        },
+        {
+            "selector": "table",
+            "props": [
+                ("background-color", "#071225"),
+                ("border-collapse", "collapse"),
+                ("border", "1px solid #1E293B"),
+            ],
+        },
+    ]
+
+
+def _apply_dark_table_style(styler):
+    return styler.apply(_dark_table_row_styles, axis=1).set_table_styles(
+        _dark_table_header_styles(),
+        overwrite=False,
+    )
+
+
 def _campaign_table(campaign_df):
     _table_section_title("Campaign Performance")
     _display_separation_note()
@@ -3528,7 +3587,7 @@ def _campaign_table(campaign_df):
         "CPM",
         "Frequency",
     ]
-    display_df = sorted_df[columns].copy()
+    display_df = sorted_df[columns].copy().reset_index(drop=True)
     display_df = display_df.rename(
         columns={
             "campaign": "Campaign",
@@ -3561,7 +3620,8 @@ def _campaign_table(campaign_df):
         return styles
 
     styled = (
-        display_df.style.apply(highlight, axis=1)
+        _apply_dark_table_style(display_df.style)
+        .apply(highlight, axis=1)
         .format(
             {
                 "Spend": _format_currency,
@@ -3587,8 +3647,8 @@ def _adset_table(adset_df):
     st.caption("Only primary result metrics are shown in this table.")
     _display_separation_note()
     adset_df = _ensure_adset_contact_metrics(adset_df)
-    display_df = _adset_display_df(adset_df)
-    styled = display_df.style.format(
+    display_df = _adset_display_df(adset_df).reset_index(drop=True)
+    styled = _apply_dark_table_style(display_df.style).format(
         {
             "Spend": _format_currency,
             "Results": "{:,.0f}",
@@ -4136,8 +4196,9 @@ def _project_performance(project_df):
             "cost_per_lead": "Cost per Lead",
         }
     )
+    display_df = display_df.reset_index(drop=True)
     display_df = _blank_non_primary_result_metrics(display_df)
-    styled = display_df.style.format(
+    styled = _apply_dark_table_style(display_df.style).format(
         {
             "Spend": _format_currency,
             "Results": "{:,.0f}",
@@ -4654,7 +4715,8 @@ def main():
                 cache_ttl_slot,
             )
 
-    if pipeline_upload is not None:
+    pipeline_upload_present = pipeline_upload is not None
+    if pipeline_upload_present:
         pipeline_df = _load_pipeline_upload(pipeline_upload)
         st.session_state[STATE_PIPELINE_DF] = pipeline_df
     else:
@@ -4682,7 +4744,10 @@ def main():
     if not generate:
         if STATE_ADS_DF not in st.session_state:
             _header(initial_label, status="Awaiting report", updated_at="-")
-            st.info("Choose a date range or preset, then click Generate Report.")
+            if pipeline_upload_present or not pipeline_df.empty:
+                st.info("Upload complete. Click Generate Report to join contacts with Meta data.")
+            else:
+                st.info("Choose a date range or preset, then click Generate Report.")
             return
 
     if generate and use_custom_range and date_from > date_to:
