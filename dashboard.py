@@ -2209,6 +2209,7 @@ def _ensure_project_contact_metrics(project_df):
         else _safe_divide(row["spend"], row["total_contacts"]),
         axis=1,
     )
+    project_df["contacts"] = project_df["total_contacts"]
     return project_df
 
 
@@ -2276,6 +2277,7 @@ def _join_adset_contacts_to_campaign(campaign_df, adset_df):
     campaign_df = campaign_df.copy()
     if adset_df.empty or "total_contacts" not in adset_df.columns:
         campaign_df["total_contacts"] = 0
+        campaign_df["contacts"] = 0
         campaign_df["cost_per_contact"] = pd.NA
         return campaign_df
 
@@ -2312,6 +2314,7 @@ def _join_adset_contacts_to_campaign(campaign_df, adset_df):
         else _safe_divide(row["spend"], row["total_contacts"]),
         axis=1,
     )
+    campaign_df["contacts"] = campaign_df["total_contacts"]
     return campaign_df
 
 
@@ -2330,6 +2333,7 @@ def _join_campaign_contacts_to_project(project_df, campaign_df):
     project_df = project_df.copy()
     if campaign_df.empty or "total_contacts" not in campaign_df.columns:
         project_df["total_contacts"] = 0
+        project_df["contacts"] = 0
         project_df["cost_per_contact"] = pd.NA
         return _ensure_project_contact_metrics(project_df)
 
@@ -2349,7 +2353,13 @@ def _join_campaign_contacts_to_project(project_df, campaign_df):
     )
 
     project_df = project_df.drop(
-        columns=["total_contacts", "paid_contacts", "organic_contacts", "cost_per_contact"],
+        columns=[
+            "total_contacts",
+            "contacts",
+            "paid_contacts",
+            "organic_contacts",
+            "cost_per_contact",
+        ],
         errors="ignore",
     )
     project_df = project_df.merge(
@@ -2741,6 +2751,7 @@ def _ensure_adset_contact_metrics(adset_df):
         else _safe_divide(row["spend"], row["total_contacts"]),
         axis=1,
     )
+    adset_df["contacts"] = adset_df["total_contacts"]
     return adset_df
 
 
@@ -3209,18 +3220,27 @@ def _card_icon(label):
     return "•"
 
 
-def _kpi_cards(filtered_df, campaign_df=None):
+def _rendered_contacts_total(project_df):
+    if project_df is None or project_df.empty:
+        return 0
+    contact_column = "contacts" if "contacts" in project_df.columns else "total_contacts"
+    if contact_column not in project_df.columns:
+        return 0
+    return int(
+        pd.to_numeric(project_df[contact_column], errors="coerce")
+        .fillna(0)
+        .sum()
+    )
+
+
+def _kpi_cards(filtered_df, project_df=None):
     total_spend = filtered_df["spend"].sum()
     total_results = filtered_df["results"].sum()
     inbox_df = filtered_df[filtered_df["primary_result_type"] == "Inbox"]
     lead_df = filtered_df[filtered_df["primary_result_type"] == "Lead"]
     total_inbox = inbox_df["inbox_messages"].sum()
     total_leads = lead_df["leads"].sum()
-    total_contacts = 0
-    if campaign_df is not None and "total_contacts" in campaign_df.columns:
-        total_contacts = pd.to_numeric(
-            campaign_df["total_contacts"], errors="coerce"
-        ).fillna(0).sum()
+    total_contacts = _rendered_contacts_total(project_df)
 
     cards = [
         {
@@ -4814,7 +4834,15 @@ def _unmapped_campaigns_debug(ads_df):
         )
 
 
-def _debug_matching_diagnostics(ads_df, pipeline_project_df, pipeline_adset_df, adset_df):
+def _debug_matching_diagnostics(
+    ads_df,
+    pipeline_project_df,
+    pipeline_adset_df,
+    adset_df,
+    pipeline_df=None,
+    pipeline_filtered_df=None,
+    has_meta_report=True,
+):
     st.markdown("---")
     with st.container(key="debug_matching_diagnostics"):
         st.markdown(
@@ -4824,6 +4852,113 @@ def _debug_matching_diagnostics(ads_df, pipeline_project_df, pipeline_adset_df, 
         _unmapped_campaigns_debug(ads_df)
         _pipeline_projects_debug(pipeline_project_df)
         _pipeline_adsets_debug(pipeline_adset_df, adset_df)
+        _pipeline_join_debug(
+            pipeline_df if pipeline_df is not None else pd.DataFrame(),
+            pipeline_filtered_df if pipeline_filtered_df is not None else pd.DataFrame(),
+            has_meta_report,
+            pipeline_adset_df,
+            adset_df,
+        )
+
+
+def _pipeline_key_counts(pipeline_adset_df):
+    if pipeline_adset_df.empty or "normalized_pipeline_key" not in pipeline_adset_df.columns:
+        return pd.DataFrame(columns=["normalized_pipeline_key", "count"])
+    return (
+        pipeline_adset_df["normalized_pipeline_key"]
+        .fillna("")
+        .astype(str)
+        .loc[lambda values: values != ""]
+        .value_counts()
+        .rename_axis("normalized_pipeline_key")
+        .reset_index(name="count")
+    )
+
+
+def _meta_key_counts(adset_df):
+    if adset_df.empty or "normalized_meta_key" not in adset_df.columns:
+        return pd.DataFrame(columns=["normalized_meta_key", "count"])
+    return (
+        adset_df["normalized_meta_key"]
+        .fillna("")
+        .astype(str)
+        .loc[lambda values: values != ""]
+        .value_counts()
+        .rename_axis("normalized_meta_key")
+        .reset_index(name="count")
+    )
+
+
+def _pipeline_debug_reason(pipeline_df, pipeline_filtered_df, has_meta_report, pipeline_adset_df, adset_df):
+    if pipeline_df.empty:
+        return "pipeline missing"
+    if not has_meta_report:
+        return "meta missing"
+    if pipeline_filtered_df.empty:
+        return "date overlap zero"
+    if _matched_adsets_count(adset_df) == 0:
+        return "key match zero"
+    return ""
+
+
+def _pipeline_join_debug(
+    pipeline_df,
+    pipeline_filtered_df,
+    has_meta_report,
+    pipeline_adset_df,
+    adset_df,
+):
+    with st.expander("Pipeline Join Debug", expanded=False):
+        pipeline_counts = _pipeline_key_counts(pipeline_adset_df)
+        meta_counts = _meta_key_counts(adset_df)
+        pipeline_keys = set(pipeline_counts["normalized_pipeline_key"].tolist())
+        meta_keys = set(meta_counts["normalized_meta_key"].tolist())
+        total_joined_contacts = int(
+            pd.to_numeric(
+                adset_df.get("total_contacts", pd.Series(dtype=float)),
+                errors="coerce",
+            )
+            .fillna(0)
+            .sum()
+        )
+        summary_df = pd.DataFrame(
+            [
+                {"Metric": "pipeline_df exists", "Value": "yes" if not pipeline_df.empty else "no"},
+                {"Metric": "pipeline row count", "Value": f"{len(pipeline_df):,}"},
+                {
+                    "Metric": "pipeline rows in selected date range",
+                    "Value": f"{len(pipeline_filtered_df):,}",
+                },
+                {"Metric": "meta report exists", "Value": "yes" if has_meta_report else "no"},
+                {"Metric": "adset_df row count", "Value": f"{len(adset_df):,}"},
+                {"Metric": "matched adset keys count", "Value": f"{_matched_adsets_count(adset_df):,}"},
+                {"Metric": "total joined contacts", "Value": f"{total_joined_contacts:,}"},
+            ]
+        )
+        _render_dark_dataframe(summary_df, use_container_width=True, hide_index=True)
+        if total_joined_contacts == 0:
+            reason = _pipeline_debug_reason(
+                pipeline_df,
+                pipeline_filtered_df,
+                has_meta_report,
+                pipeline_adset_df,
+                adset_df,
+            )
+            st.warning(f"Total joined contacts = 0: {reason}.")
+        st.caption("First 20 normalized_pipeline_key values with counts")
+        _render_dark_dataframe(pipeline_counts.head(20), use_container_width=True, hide_index=True)
+        st.caption("First 20 normalized_meta_key values with counts")
+        _render_dark_dataframe(meta_counts.head(20), use_container_width=True, hide_index=True)
+        missing_in_meta_df = pd.DataFrame(
+            {"pipeline keys missing in meta": sorted(pipeline_keys - meta_keys)[:20]}
+        )
+        missing_in_pipeline_df = pd.DataFrame(
+            {"meta keys missing in pipeline": sorted(meta_keys - pipeline_keys)[:20]}
+        )
+        st.caption("Pipeline keys missing in Meta")
+        _render_dark_dataframe(missing_in_meta_df, use_container_width=True, hide_index=True)
+        st.caption("Meta keys missing in Pipeline")
+        _render_dark_dataframe(missing_in_pipeline_df, use_container_width=True, hide_index=True)
 
 
 def _pipeline_joined_rows(adset_df):
@@ -4872,6 +5007,7 @@ def _render_pipeline_sidebar_status(
     pipeline_df,
     pipeline_filtered_df,
     has_meta_report,
+    project_df=None,
     adset_df=None,
     pipeline_adset_df=None,
 ):
@@ -4886,10 +5022,29 @@ def _render_pipeline_sidebar_status(
     st.sidebar.caption(f"Pipeline rows uploaded: {len(pipeline_df):,}")
     st.sidebar.caption(f"Pipeline rows in selected date range: {len(pipeline_filtered_df):,}")
     joined_rows = _pipeline_joined_rows(adset_df) if adset_df is not None else 0
+    total_joined_contacts = 0
+    adset_row_count = 0
+    if adset_df is not None and not adset_df.empty:
+        adset_row_count = len(adset_df)
+        total_joined_contacts = int(
+            pd.to_numeric(
+                adset_df.get("total_contacts", pd.Series(dtype=float)),
+                errors="coerce",
+            )
+            .fillna(0)
+            .sum()
+        )
     matched_adsets = _matched_adsets_count(adset_df) if adset_df is not None else 0
     pipeline_joined = has_meta_report and pipeline_uploaded and joined_rows > 0
+    st.sidebar.caption(f"pipeline_df exists: {'yes' if not pipeline_df.empty else 'no'}")
+    st.sidebar.caption(f"meta report exists: {'yes' if has_meta_report else 'no'}")
+    st.sidebar.caption(f"adset_df row count: {adset_row_count:,}")
     st.sidebar.caption(f"Pipeline joined: {'yes' if pipeline_joined else 'no'}")
-    st.sidebar.caption(f"Matched adsets count: {matched_adsets:,}")
+    st.sidebar.caption(f"matched adset keys count: {matched_adsets:,}")
+    st.sidebar.caption(f"total joined contacts: {total_joined_contacts:,}")
+    st.sidebar.caption(
+        f"Rendered contacts total: {_rendered_contacts_total(project_df):,}"
+    )
     if not has_pipeline_session or pipeline_joined:
         return
     reason = _pipeline_join_warning_reason(
@@ -5184,6 +5339,7 @@ def main():
         pipeline_df,
         pipeline_filtered_df,
         has_meta_report=True,
+        project_df=project_df,
         adset_df=adset_df,
         pipeline_adset_df=pipeline_adset_df,
     )
@@ -5195,7 +5351,7 @@ def main():
         status=st.session_state.get(STATE_CACHE_STATUS, "Ready"),
         updated_at=report_updated_at,
     )
-    _kpi_cards(filtered_df, campaign_df)
+    _kpi_cards(filtered_df, project_df)
     _dashboard_top_chart_row(all_daily_df, project_df)
     _project_performance(project_df)
     _campaign_table(campaign_df)
@@ -5212,6 +5368,9 @@ def main():
         pipeline_project_df,
         pipeline_adset_df,
         adset_df,
+        pipeline_df=pipeline_df,
+        pipeline_filtered_df=pipeline_filtered_df,
+        has_meta_report=True,
     )
 
 
