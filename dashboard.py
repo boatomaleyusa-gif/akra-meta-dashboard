@@ -172,6 +172,8 @@ STATE_FETCH_REQUEST_KEY = "fetch_request_key"
 STATE_CACHE_STATUS = "cache_status"
 STATE_DATA_SOURCE_WARNING = "data_source_warning"
 STATE_REPORT_UPDATED_AT = "report_updated_at"
+STATE_SIDEBAR_OPEN = "sidebar_open"
+STATE_PIPELINE_DF = "pipeline_df"
 META_CACHE_TTL_SECONDS = 30 * 60
 
 
@@ -588,9 +590,42 @@ def _styles(dark_theme=True):
                 --orange: #fb923c;
                 --shadow: 0 20px 54px rgba(2, 6, 23, 0.42);
             }
-            #MainMenu, footer, header[data-testid="stHeader"] {
+            #MainMenu, footer {
                 visibility: hidden;
                 height: 0;
+            }
+            header[data-testid="stHeader"] {
+                visibility: visible !important;
+                height: 2.75rem !important;
+                background: transparent !important;
+                pointer-events: auto !important;
+            }
+            /* Force sidebar visible */
+            section[data-testid="stSidebar"] {
+                display: block !important;
+                visibility: visible !important;
+                transform: none !important;
+                margin-left: 0 !important;
+                pointer-events: auto !important;
+            }
+            /* Show sidebar toggle button */
+            button[kind="header"] {
+                display: flex !important;
+                opacity: 1 !important;
+                visibility: visible !important;
+                pointer-events: auto !important;
+            }
+            /* Show collapsed control */
+            [data-testid="collapsedControl"] {
+                display: flex !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+                pointer-events: auto !important;
+            }
+            /* Prevent accidental hidden nav */
+            section[data-testid="stSidebarNav"] {
+                display: block !important;
+                visibility: visible !important;
             }
             .stApp, html, body, [data-testid="stAppViewContainer"] {
                 background:
@@ -600,9 +635,34 @@ def _styles(dark_theme=True):
                 font-family: Inter, "Segoe UI", system-ui, sans-serif !important;
                 font-size: 14px;
             }
+            html, body, [class*="css"] {
+                font-family: "Inter", "Segoe UI", sans-serif !important;
+                letter-spacing: 0 !important;
+            }
             * {
-                font-family: Inter, "Segoe UI", system-ui, sans-serif !important;
-                letter-spacing: 0;
+                box-sizing: border-box;
+            }
+            h1, h2, h3, h4 {
+                line-height: 1.2 !important;
+                margin-bottom: 0.4rem !important;
+            }
+            .material-symbols-rounded,
+            .material-symbols-outlined,
+            .material-icons,
+            span[data-testid="stIconMaterial"],
+            i[data-testid="stIconMaterial"] {
+                font-family: "Material Symbols Rounded", "Material Symbols Outlined", "Material Icons" !important;
+                font-weight: normal !important;
+                font-style: normal !important;
+                letter-spacing: normal !important;
+                line-height: 1 !important;
+                text-transform: none !important;
+                white-space: nowrap !important;
+                word-wrap: normal !important;
+                direction: ltr !important;
+                -webkit-font-feature-settings: "liga" !important;
+                -webkit-font-smoothing: antialiased !important;
+                font-feature-settings: "liga" !important;
             }
             .block-container {
                 max-width: 1600px;
@@ -651,8 +711,12 @@ def _styles(dark_theme=True):
                 border: 1px solid rgba(96, 165, 250, 0.55) !important;
                 border-radius: 8px !important;
                 color: var(--text) !important;
-                font-weight: 700 !important;
-                min-height: 40px;
+                font-size: 14px !important;
+                font-weight: 600 !important;
+                letter-spacing: 0 !important;
+                line-height: 1.2 !important;
+                min-height: 42px;
+                padding: 0.58rem 0.82rem !important;
                 box-shadow: 0 12px 30px rgba(14, 165, 233, 0.18);
             }
             .exec-header,
@@ -874,33 +938,250 @@ def _styles(dark_theme=True):
                 padding: 18px;
             }
             div[data-testid="stDataFrame"] {
-                background: var(--panel-2) !important;
+                background: #071225 !important;
                 overflow: hidden;
             }
             div[data-testid="stDataFrame"] div[role="grid"] {
-                color: var(--text) !important;
+                background: #071225 !important;
+                color: #E6EDF7 !important;
+                border-color: #1E293B !important;
                 font-size: 12.5px !important;
                 font-weight: 400 !important;
             }
+            div[data-testid="stDataFrame"],
+            div[data-testid="stDataFrame"] table,
+            div[data-testid="stDataFrame"] [role="grid"],
+            div[data-testid="stDataFrame"] [data-testid="stTable"] {
+                background: #071225 !important;
+                border-color: #1E293B !important;
+            }
             div[data-testid="stDataFrame"] [role="columnheader"] {
-                background: #0f172a !important;
-                color: var(--text) !important;
-                border-bottom: 1px solid var(--border) !important;
+                background: #0F172A !important;
+                color: #7DD3FC !important;
+                border-color: #1E293B !important;
+                border-bottom: 1px solid #1E293B !important;
                 position: sticky;
                 top: 0;
                 z-index: 2;
                 font-size: 12px !important;
                 font-weight: 650 !important;
             }
+            div[data-testid="stDataFrame"] thead,
+            div[data-testid="stDataFrame"] thead tr,
+            div[data-testid="stDataFrame"] th {
+                background: #0F172A !important;
+                color: #7DD3FC !important;
+                border-color: #1E293B !important;
+            }
+            div[data-testid="stDataFrame"] tbody,
+            div[data-testid="stDataFrame"] tbody tr,
+            div[data-testid="stDataFrame"] td,
             div[data-testid="stDataFrame"] [role="gridcell"] {
+                background: #071225 !important;
+                color: #E6EDF7 !important;
+                border-color: #1E293B !important;
                 font-size: 12.5px !important;
                 font-weight: 400 !important;
             }
+            div[data-testid="stDataFrame"] tbody tr:nth-child(even),
+            div[data-testid="stDataFrame"] [role="row"]:nth-child(even) [role="gridcell"] {
+                background: #0B1730 !important;
+            }
+            div[data-testid="stDataFrame"] tbody tr:hover,
+            div[data-testid="stDataFrame"] [role="row"]:hover [role="gridcell"] {
+                background: #13203A !important;
+            }
             div[data-testid="stDataFrame"] [role="row"]:nth-child(even) {
-                background: rgba(15, 23, 42, 0.46) !important;
+                background: #0B1730 !important;
             }
             div[data-testid="stDataFrame"] [role="row"]:hover {
-                background: rgba(34, 211, 238, 0.08) !important;
+                background: #13203A !important;
+            }
+            div[data-testid="stDataFrame"] [role="row"]:nth-child(even) [role="gridcell"],
+            div[data-testid="stDataFrame"] [role="row"]:nth-child(even) [role="columnheader"] {
+                background: #0B1730 !important;
+            }
+            div[data-testid="stDataFrame"] [role="row"]:hover [role="gridcell"],
+            div[data-testid="stDataFrame"] [role="row"]:hover [role="columnheader"] {
+                background: #13203A !important;
+            }
+            div[data-testid="stDataFrame"] * {
+                border-color: #1E293B !important;
+            }
+            /* Typography and spacing polish */
+            div[data-testid="stVerticalBlock"] {
+                gap: 0.75rem !important;
+            }
+            div[data-testid="stHorizontalBlock"] {
+                gap: 12px !important;
+                align-items: stretch !important;
+            }
+            [data-testid="column"] {
+                min-width: 0 !important;
+            }
+            [data-testid="stWidgetLabel"],
+            [data-testid="stWidgetLabel"] p,
+            label,
+            .stMarkdown p,
+            .stCaptionContainer,
+            [data-testid="stCaptionContainer"] {
+                font-size: 13px !important;
+                line-height: 1.45 !important;
+                letter-spacing: 0 !important;
+            }
+            [data-testid="stWidgetLabel"] p,
+            label {
+                color: #cbd5e1 !important;
+                font-weight: 600 !important;
+                margin-bottom: 0.35rem !important;
+            }
+            div[data-testid="stExpander"] {
+                border: 1px solid var(--border) !important;
+                border-radius: 8px !important;
+                background: rgba(17, 24, 39, 0.54) !important;
+                overflow: hidden !important;
+            }
+            div[data-testid="stExpander"] details,
+            div[data-testid="stExpander"] summary {
+                color: var(--text) !important;
+            }
+            div[data-testid="stExpander"] summary {
+                min-height: 44px !important;
+                display: flex !important;
+                align-items: center !important;
+                gap: 10px !important;
+                padding: 0.72rem 0.9rem !important;
+                line-height: 1.25 !important;
+                font-size: 14px !important;
+                font-weight: 650 !important;
+                letter-spacing: 0 !important;
+            }
+            div[data-testid="stExpander"] summary p {
+                margin: 0 !important;
+                line-height: 1.25 !important;
+            }
+            .section-title {
+                margin: 18px 0 10px !important;
+                font-size: 20px !important;
+                line-height: 1.25 !important;
+                letter-spacing: 0 !important;
+            }
+            .table-title-bar {
+                min-height: 44px;
+                display: flex;
+                align-items: center;
+                padding: 12px 15px !important;
+                line-height: 1.25 !important;
+            }
+            .kpi-card {
+                min-height: 140px !important;
+                padding: 20px 20px 18px !important;
+                display: flex;
+                flex-direction: column;
+                justify-content: space-between;
+                gap: 8px;
+            }
+            .kpi-topline {
+                min-height: 36px;
+            }
+            .kpi-label,
+            .kpi-group {
+                font-size: 11px !important;
+                line-height: 1.25 !important;
+                letter-spacing: 0.07em !important;
+                margin: 0 !important;
+            }
+            .kpi-value {
+                font-size: clamp(28px, 2.2vw, 36px) !important;
+                line-height: 1.05 !important;
+                margin-top: 6px !important;
+                overflow-wrap: anywhere;
+            }
+            .decision-detail {
+                min-height: 18px;
+                overflow-wrap: anywhere;
+            }
+            .card-grid {
+                gap: 16px !important;
+                margin-bottom: 14px !important;
+            }
+            [data-testid="stSidebar"] {
+                line-height: 1.45 !important;
+            }
+            [data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
+            [data-testid="stSidebar"] label,
+            [data-testid="stSidebar"] span,
+            [data-testid="stSidebar"] p,
+            [data-testid="stSidebar"] small {
+                line-height: 1.45 !important;
+                letter-spacing: 0 !important;
+            }
+            [data-testid="stSidebar"] [data-testid="stFileUploader"] {
+                padding: 14px !important;
+                text-align: center !important;
+            }
+            [data-testid="stSidebar"] [data-testid="stFileUploader"] section {
+                border-color: #475569 !important;
+                border-radius: 8px !important;
+                padding: 14px !important;
+            }
+            [data-testid="stSidebar"] [data-testid="stFileUploader"] button {
+                margin: 8px auto 0 !important;
+                min-height: 38px !important;
+            }
+            [data-testid="stSidebar"] [data-testid="stFileUploader"] p,
+            [data-testid="stSidebar"] [data-testid="stFileUploader"] span {
+                font-size: 12.5px !important;
+                line-height: 1.45 !important;
+                white-space: normal !important;
+            }
+            .stButton button {
+                font-size: 14px !important;
+                font-weight: 600 !important;
+                letter-spacing: 0 !important;
+                line-height: 1.2 !important;
+                min-height: 42px !important;
+                white-space: normal !important;
+                word-break: normal !important;
+            }
+            div[data-testid="stSlider"],
+            div[data-testid="stSelectbox"],
+            div[data-testid="stMultiSelect"],
+            div[data-testid="stDateInput"] {
+                margin-bottom: 0 !important;
+            }
+            div[data-baseweb="select"] > div,
+            div[data-baseweb="input"] > div,
+            [data-testid="stDateInput"] input {
+                min-height: 42px !important;
+                align-items: center !important;
+            }
+            div[data-testid="stDataFrame"] {
+                font-size: 13px !important;
+            }
+            div[data-testid="stDataFrame"] [role="columnheader"],
+            div[data-testid="stDataFrame"] th {
+                color: #7DD3FC !important;
+                font-size: 12.5px !important;
+                font-weight: 700 !important;
+                line-height: 1.35 !important;
+                min-height: 36px !important;
+                padding: 9px 10px !important;
+            }
+            div[data-testid="stDataFrame"] [role="gridcell"],
+            div[data-testid="stDataFrame"] td {
+                font-size: 12.75px !important;
+                line-height: 1.42 !important;
+                min-height: 34px !important;
+                padding: 8px 10px !important;
+                vertical-align: middle !important;
+            }
+            div[data-testid="stDataFrame"] [role="row"] {
+                min-height: 34px !important;
+            }
+            div[data-testid="stDataFrame"] td:not(:first-child),
+            div[data-testid="stDataFrame"] th:not(:first-child) {
+                text-align: right !important;
             }
             .badge-good { background: rgba(16, 185, 129, 0.16); color: var(--green); }
             .badge-watch { background: rgba(251, 146, 60, 0.16); color: var(--orange); }
@@ -935,10 +1216,112 @@ def _styles(dark_theme=True):
                     padding-right: 1rem;
                 }
             }
+            .st-key-debug_matching_diagnostics {
+                opacity: 0.72;
+                margin-top: 8px;
+            }
+            .st-key-debug_matching_diagnostics .section-title {
+                color: #94a3b8 !important;
+                border-left-color: #475569 !important;
+                font-size: 16px !important;
+                margin-top: 8px !important;
+            }
+            .st-key-debug_matching_diagnostics div[data-testid="stExpander"] {
+                border-color: rgba(71, 85, 105, 0.58) !important;
+                background: rgba(15, 23, 42, 0.42) !important;
+                box-shadow: none !important;
+            }
+            .st-key-debug_matching_diagnostics div[data-testid="stExpander"] summary {
+                min-height: 38px !important;
+                padding: 0.55rem 0.78rem !important;
+                font-size: 12.5px !important;
+                color: #94a3b8 !important;
+                font-weight: 600 !important;
+            }
+            .st-key-debug_matching_diagnostics div[data-testid="stExpander"] [data-testid="stCaptionContainer"],
+            .st-key-debug_matching_diagnostics div[data-testid="stExpander"] p {
+                font-size: 12px !important;
+                color: #94a3b8 !important;
+            }
+            .st-key-debug_matching_diagnostics div[data-testid="stDataFrame"] {
+                box-shadow: none !important;
+                border-color: rgba(71, 85, 105, 0.48) !important;
+            }
         </style>
         """,
         unsafe_allow_html=True,
     )
+
+
+def _sidebar_visibility_styles(sidebar_open):
+    if sidebar_open:
+        return
+    st.markdown(
+        """
+        <style>
+            section[data-testid="stSidebar"] {
+                display: block !important;
+                visibility: visible !important;
+                width: 0 !important;
+                min-width: 0 !important;
+                max-width: 0 !important;
+                flex: 0 0 0 !important;
+                overflow: hidden !important;
+                border-right: 0 !important;
+                box-shadow: none !important;
+            }
+            section[data-testid="stSidebar"] > div,
+            section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+                display: none !important;
+                visibility: hidden !important;
+                width: 0 !important;
+                min-width: 0 !important;
+                max-width: 0 !important;
+                overflow: hidden !important;
+            }
+            [data-testid="stAppViewContainer"],
+            [data-testid="stMain"],
+            .main {
+                margin-left: 0 !important;
+                max-width: 100% !important;
+            }
+            .block-container {
+                max-width: 1600px !important;
+                padding-left: 1.7rem !important;
+                padding-right: 1.7rem !important;
+            }
+            button[kind="header"],
+            [data-testid="collapsedControl"] {
+                display: flex !important;
+                opacity: 1 !important;
+                visibility: visible !important;
+                pointer-events: auto !important;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_sidebar_toggle():
+    sidebar_open = st.session_state.get(STATE_SIDEBAR_OPEN, True)
+    label = "Hide controls" if sidebar_open else "Show controls"
+    toggle_columns = st.columns([0.16, 0.84])
+    with toggle_columns[0]:
+        if st.button(label, key="custom_sidebar_visibility_toggle", use_container_width=True):
+            st.session_state[STATE_SIDEBAR_OPEN] = not sidebar_open
+            st.rerun()
+
+
+class _HiddenSidebarSlot:
+    def caption(self, *args, **kwargs):
+        return None
+
+    def empty(self, *args, **kwargs):
+        return None
+
+    def download_button(self, *args, **kwargs):
+        return None
 
 
 def _apply_plotly_dark_theme(fig):
@@ -4193,57 +4576,95 @@ def _unmapped_campaigns_debug(ads_df):
         )
 
 
+def _debug_matching_diagnostics(ads_df, pipeline_project_df, pipeline_adset_df, adset_df):
+    st.markdown("---")
+    with st.container(key="debug_matching_diagnostics"):
+        st.markdown(
+            '<div class="section-title">Debug & Matching Diagnostics</div>',
+            unsafe_allow_html=True,
+        )
+        _unmapped_campaigns_debug(ads_df)
+        _pipeline_projects_debug(pipeline_project_df)
+        _pipeline_adsets_debug(pipeline_adset_df, adset_df)
+
+
 def main():
     st.set_page_config(page_title="Real Estate Meta Ads Dashboard", layout="wide")
-    dark_theme = st.sidebar.toggle(
-        "Dark analytics theme",
-        value=True,
-        key="dark_analytics_theme",
-    )
+    st.session_state.setdefault(STATE_SIDEBAR_OPEN, True)
+    st.session_state.setdefault("dark_analytics_theme", True)
+    dark_theme = st.session_state.get("dark_analytics_theme", True)
     _styles(dark_theme)
+    _sidebar_visibility_styles(st.session_state[STATE_SIDEBAR_OPEN])
+    _render_sidebar_toggle()
 
     today = date.today()
     default_from = today - timedelta(days=6)
+    st.session_state.setdefault(STATE_USE_CUSTOM_RANGE, True)
+    st.session_state.setdefault(STATE_DATE_FROM, default_from)
+    st.session_state.setdefault(STATE_DATE_TO, today)
+    st.session_state.setdefault(STATE_PRESET, PRESETS[2])
 
-    with st.sidebar:
-        st.header("Report Controls")
-        use_custom_range = st.checkbox(
-            "Use custom date range", value=True, key=STATE_USE_CUSTOM_RANGE
-        )
-        date_from = st.date_input("META_DATE_FROM", value=default_from, key=STATE_DATE_FROM)
-        date_to = st.date_input("META_DATE_TO", value=today, key=STATE_DATE_TO)
-        preset = st.selectbox("META_DATE_PRESET", PRESETS, index=2, key=STATE_PRESET)
-        pipeline_upload = st.file_uploader(
-            "Upload Sale Pipeline Leads CSV/XLS/XLSX",
-            type=["csv", "xlsx", "xls"],
-            key="sale_pipeline_leads_csv",
-        )
+    use_custom_range = st.session_state[STATE_USE_CUSTOM_RANGE]
+    date_from = st.session_state[STATE_DATE_FROM]
+    date_to = st.session_state[STATE_DATE_TO]
+    preset = st.session_state[STATE_PRESET]
+    pipeline_upload = st.session_state.get("sale_pipeline_leads_csv")
+    generate = False
+    hidden_slot = _HiddenSidebarSlot()
+    cache_status_slot = hidden_slot
+    last_updated_slot = hidden_slot
+    csv_download_slot = hidden_slot
+    cache_ttl_slot = hidden_slot
+
+    if st.session_state[STATE_SIDEBAR_OPEN]:
+        with st.sidebar:
+            st.header("Report Controls")
+            dark_theme = st.toggle("Dark analytics theme", key="dark_analytics_theme")
+            use_custom_range = st.checkbox(
+                "Use custom date range", key=STATE_USE_CUSTOM_RANGE
+            )
+            date_from = st.date_input("META_DATE_FROM", key=STATE_DATE_FROM)
+            date_to = st.date_input("META_DATE_TO", key=STATE_DATE_TO)
+            preset = st.selectbox("META_DATE_PRESET", PRESETS, key=STATE_PRESET)
+            pipeline_upload = st.file_uploader(
+                "Upload Sale Pipeline Leads CSV/XLS/XLSX",
+                type=["csv", "xlsx", "xls"],
+                key="sale_pipeline_leads_csv",
+            )
+            if st.button("Clear cached Meta data", use_container_width=True, key="clear_cached_meta_data"):
+                _cached_meta_ads_data.clear()
+                st.session_state.pop(STATE_ADS_DF, None)
+                st.session_state.pop(STATE_DATE_RANGE_LABEL, None)
+                st.session_state.pop(STATE_FETCH_REQUEST_KEY, None)
+                st.session_state.pop(STATE_DATA_SOURCE_WARNING, None)
+                st.session_state.pop(STATE_REPORT_UPDATED_AT, None)
+                st.session_state[STATE_CACHE_STATUS] = "Cache cleared"
+                st.success("Meta data cache cleared. Click Generate Report to fetch again.")
+            generate = st.button(
+                "Generate Report", type="primary", use_container_width=True, key="generate_report"
+            )
+            cache_status_slot = st.empty()
+            last_updated_slot = st.empty()
+            csv_download_slot = st.empty()
+            cache_ttl_slot = st.empty()
+            _render_sidebar_data_controls(
+                cache_status_slot,
+                last_updated_slot,
+                csv_download_slot,
+                cache_ttl_slot,
+            )
+
+    if pipeline_upload is not None:
         pipeline_df = _load_pipeline_upload(pipeline_upload)
-        pipeline_filtered_df = _filter_pipeline_by_date_range(
-            pipeline_df, date_from, date_to
+        st.session_state[STATE_PIPELINE_DF] = pipeline_df
+    else:
+        pipeline_df = st.session_state.get(
+            STATE_PIPELINE_DF,
+            pd.DataFrame(columns=PIPELINE_REQUIRED_COLUMNS),
         )
-        if st.button("Clear cached Meta data", use_container_width=True, key="clear_cached_meta_data"):
-            _cached_meta_ads_data.clear()
-            st.session_state.pop(STATE_ADS_DF, None)
-            st.session_state.pop(STATE_DATE_RANGE_LABEL, None)
-            st.session_state.pop(STATE_FETCH_REQUEST_KEY, None)
-            st.session_state.pop(STATE_DATA_SOURCE_WARNING, None)
-            st.session_state.pop(STATE_REPORT_UPDATED_AT, None)
-            st.session_state[STATE_CACHE_STATUS] = "Cache cleared"
-            st.success("Meta data cache cleared. Click Generate Report to fetch again.")
-        generate = st.button(
-            "Generate Report", type="primary", use_container_width=True, key="generate_report"
-        )
-        cache_status_slot = st.empty()
-        last_updated_slot = st.empty()
-        csv_download_slot = st.empty()
-        cache_ttl_slot = st.empty()
-        _render_sidebar_data_controls(
-            cache_status_slot,
-            last_updated_slot,
-            csv_download_slot,
-            cache_ttl_slot,
-        )
+    pipeline_filtered_df = _filter_pipeline_by_date_range(
+        pipeline_df, date_from, date_to
+    )
 
     restored_file_cache = False
     if not generate and STATE_ADS_DF not in st.session_state:
@@ -4405,11 +4826,14 @@ def main():
     _thai_performance_agency_summary(filtered_df, campaign_df, adset_df, creative_df)
     _aggregation_check(filtered_df)
     _management_notes(campaign_df)
-    _unmapped_campaigns_debug(ads_df)
-    _pipeline_projects_debug(pipeline_project_df)
-    _pipeline_adsets_debug(pipeline_adset_df, adset_df)
     _charts(lead_daily_df, inbox_daily_df, campaign_df)
     _creative_section(creative_df)
+    _debug_matching_diagnostics(
+        ads_df,
+        pipeline_project_df,
+        pipeline_adset_df,
+        adset_df,
+    )
 
 
 if __name__ == "__main__":
