@@ -174,6 +174,8 @@ STATE_DATA_SOURCE_WARNING = "data_source_warning"
 STATE_REPORT_UPDATED_AT = "report_updated_at"
 STATE_SIDEBAR_OPEN = "sidebar_open"
 STATE_PIPELINE_DF = "pipeline_df"
+STATE_PIPELINE_UPLOAD_SIGNATURE = "pipeline_upload_signature"
+STATE_PIPELINE_UPLOAD_MESSAGE = "pipeline_upload_message"
 META_CACHE_TTL_SECONDS = 30 * 60
 
 
@@ -937,14 +939,17 @@ def _styles(dark_theme=True):
                 font-weight: 800;
                 padding: 18px;
             }
+            .stDataFrame,
+            [data-testid="stDataFrame"],
             div[data-testid="stDataFrame"] {
-                background: #071225 !important;
+                background: #071226 !important;
+                color: #dbe7ff !important;
                 overflow: hidden;
             }
             div[data-testid="stDataFrame"] div[role="grid"] {
-                background: #071225 !important;
-                color: #E6EDF7 !important;
-                border-color: #1E293B !important;
+                background: #071226 !important;
+                color: #dbe7ff !important;
+                border-color: rgba(120,160,255,0.12) !important;
                 font-size: 12.5px !important;
                 font-weight: 400 !important;
             }
@@ -952,14 +957,14 @@ def _styles(dark_theme=True):
             div[data-testid="stDataFrame"] table,
             div[data-testid="stDataFrame"] [role="grid"],
             div[data-testid="stDataFrame"] [data-testid="stTable"] {
-                background: #071225 !important;
-                border-color: #1E293B !important;
+                background: #071226 !important;
+                border-color: rgba(120,160,255,0.12) !important;
             }
             div[data-testid="stDataFrame"] [role="columnheader"] {
-                background: #0F172A !important;
-                color: #7DD3FC !important;
-                border-color: #1E293B !important;
-                border-bottom: 1px solid #1E293B !important;
+                background: #0f1c36 !important;
+                color: #8fb7ff !important;
+                border-color: rgba(120,160,255,0.12) !important;
+                border-bottom: 1px solid rgba(120,160,255,0.12) !important;
                 position: sticky;
                 top: 0;
                 z-index: 2;
@@ -969,44 +974,44 @@ def _styles(dark_theme=True):
             div[data-testid="stDataFrame"] thead,
             div[data-testid="stDataFrame"] thead tr,
             div[data-testid="stDataFrame"] th {
-                background: #0F172A !important;
-                color: #7DD3FC !important;
-                border-color: #1E293B !important;
+                background: #0f1c36 !important;
+                color: #8fb7ff !important;
+                border-color: rgba(120,160,255,0.12) !important;
             }
             div[data-testid="stDataFrame"] tbody,
             div[data-testid="stDataFrame"] tbody tr,
             div[data-testid="stDataFrame"] td,
             div[data-testid="stDataFrame"] [role="gridcell"] {
-                background: #071225 !important;
-                color: #E6EDF7 !important;
-                border-color: #1E293B !important;
+                background: #071226 !important;
+                color: #dbe7ff !important;
+                border-color: rgba(120,160,255,0.08) !important;
                 font-size: 12.5px !important;
                 font-weight: 400 !important;
             }
             div[data-testid="stDataFrame"] tbody tr:nth-child(even),
             div[data-testid="stDataFrame"] [role="row"]:nth-child(even) [role="gridcell"] {
-                background: #0B1730 !important;
+                background: #0b1730 !important;
             }
             div[data-testid="stDataFrame"] tbody tr:hover,
             div[data-testid="stDataFrame"] [role="row"]:hover [role="gridcell"] {
-                background: #13203A !important;
+                background: #13264a !important;
             }
             div[data-testid="stDataFrame"] [role="row"]:nth-child(even) {
-                background: #0B1730 !important;
+                background: #0b1730 !important;
             }
             div[data-testid="stDataFrame"] [role="row"]:hover {
-                background: #13203A !important;
+                background: #13264a !important;
             }
             div[data-testid="stDataFrame"] [role="row"]:nth-child(even) [role="gridcell"],
             div[data-testid="stDataFrame"] [role="row"]:nth-child(even) [role="columnheader"] {
-                background: #0B1730 !important;
+                background: #0b1730 !important;
             }
             div[data-testid="stDataFrame"] [role="row"]:hover [role="gridcell"],
             div[data-testid="stDataFrame"] [role="row"]:hover [role="columnheader"] {
-                background: #13203A !important;
+                background: #13264a !important;
             }
             div[data-testid="stDataFrame"] * {
-                border-color: #1E293B !important;
+                border-color: rgba(120,160,255,0.12) !important;
             }
             /* Typography and spacing polish */
             div[data-testid="stVerticalBlock"] {
@@ -1161,7 +1166,8 @@ def _styles(dark_theme=True):
             }
             div[data-testid="stDataFrame"] [role="columnheader"],
             div[data-testid="stDataFrame"] th {
-                color: #7DD3FC !important;
+                background: #0f1c36 !important;
+                color: #8fb7ff !important;
                 font-size: 12.5px !important;
                 font-weight: 700 !important;
                 line-height: 1.35 !important;
@@ -1170,6 +1176,9 @@ def _styles(dark_theme=True):
             }
             div[data-testid="stDataFrame"] [role="gridcell"],
             div[data-testid="stDataFrame"] td {
+                background: #071226 !important;
+                color: #dbe7ff !important;
+                border-color: rgba(120,160,255,0.08) !important;
                 font-size: 12.75px !important;
                 line-height: 1.42 !important;
                 min-height: 34px !important;
@@ -1529,6 +1538,19 @@ def _load_pipeline_upload(uploaded_file):
     if legacy_html_export:
         st.sidebar.info("Loaded legacy HTML Excel export")
     return pipeline_df
+
+
+def _pipeline_upload_signature(uploaded_file):
+    if uploaded_file is None:
+        return ""
+    file_name = getattr(uploaded_file, "name", "")
+    file_size = getattr(uploaded_file, "size", None)
+    if file_size is None:
+        try:
+            file_size = len(uploaded_file.getvalue())
+        except Exception:
+            file_size = ""
+    return f"{file_name}:{file_size}"
 
 
 def _is_organic_pipeline_row(row):
@@ -2763,7 +2785,7 @@ def _pipeline_projects_debug(pipeline_project_df):
                     "total_contacts": "Contacts",
                 }
             )
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            _render_dark_dataframe(display_df, use_container_width=True, hide_index=True)
 
     if unmatched_df.empty:
         return
@@ -2778,7 +2800,7 @@ def _pipeline_projects_debug(pipeline_project_df):
                 "total_contacts": "Contacts",
             }
         )
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        _render_dark_dataframe(display_df, use_container_width=True, hide_index=True)
 
 
 def _pipeline_adsets_debug(pipeline_adset_df, adset_df):
@@ -2812,7 +2834,7 @@ def _pipeline_adsets_debug(pipeline_adset_df, adset_df):
                     "total_contacts": "Contacts",
                 }
             )
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            _render_dark_dataframe(display_df, use_container_width=True, hide_index=True)
 
     if not token_df.empty:
         with st.expander("Ad Set Matches: Unique Token Key", expanded=False):
@@ -2839,7 +2861,7 @@ def _pipeline_adsets_debug(pipeline_adset_df, adset_df):
                     "token_key": "Token Key",
                 }
             )
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            _render_dark_dataframe(display_df, use_container_width=True, hide_index=True)
 
     if not ambiguous_token_df.empty:
         with st.expander("Ad Set Matches: Ambiguous Token Keys", expanded=False):
@@ -2856,7 +2878,7 @@ def _pipeline_adsets_debug(pipeline_adset_df, adset_df):
                     "pipeline_contacts": "Pipeline Contacts",
                 }
             )
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            _render_dark_dataframe(display_df, use_container_width=True, hide_index=True)
 
     if not unmatched_pipeline_df.empty:
         with st.expander("Ad Set Matches: Unmatched Sale Pipeline Ad Sets", expanded=False):
@@ -2877,7 +2899,7 @@ def _pipeline_adsets_debug(pipeline_adset_df, adset_df):
                 display_df["pipeline_creative_type"] = unmatched_pipeline_df[
                     "pipeline_creative_type"
                 ]
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            _render_dark_dataframe(display_df, use_container_width=True, hide_index=True)
 
     if not unmatched_meta_df.empty:
         with st.expander("Ad Set Matches: Unmatched Meta Ad Sets", expanded=False):
@@ -2894,7 +2916,7 @@ def _pipeline_adsets_debug(pipeline_adset_df, adset_df):
                     "adset": "Meta Ad Set",
                 }
             )
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            _render_dark_dataframe(display_df, use_container_width=True, hide_index=True)
 
 
 def _cache_status_from_created_at(cache_created_at):
@@ -3507,12 +3529,12 @@ def _table_section_title(title):
 
 
 def _dark_table_row_styles(row):
-    row_bg = "#0B1730" if row.name % 2 else "#071225"
+    row_bg = "#0b1730" if row.name % 2 else "#071226"
     return [
         (
             f"background-color: {row_bg}; "
-            "color: #E6EDF7; "
-            "border: 1px solid #1E293B; "
+            "color: #dbe7ff; "
+            "border: 1px solid rgba(120,160,255,0.12); "
             "padding: 8px 10px;"
         )
         for _ in row
@@ -3524,9 +3546,9 @@ def _dark_table_header_styles():
         {
             "selector": "thead th",
             "props": [
-                ("background-color", "#0F172A"),
-                ("color", "#7DD3FC"),
-                ("border", "1px solid #1E293B"),
+                ("background-color", "#0f1c36"),
+                ("color", "#8fb7ff"),
+                ("border", "1px solid rgba(120,160,255,0.12)"),
                 ("padding", "9px 10px"),
                 ("font-weight", "700"),
                 ("text-align", "left"),
@@ -3535,24 +3557,25 @@ def _dark_table_header_styles():
         {
             "selector": "tbody td",
             "props": [
-                ("color", "#E6EDF7"),
-                ("border", "1px solid #1E293B"),
+                ("background-color", "#071226"),
+                ("color", "#dbe7ff"),
+                ("border", "1px solid rgba(120,160,255,0.12)"),
                 ("padding", "8px 10px"),
             ],
         },
         {
             "selector": "tbody tr:hover td",
             "props": [
-                ("background-color", "#13203A"),
-                ("color", "#E6EDF7"),
+                ("background-color", "#13264a"),
+                ("color", "#dbe7ff"),
             ],
         },
         {
             "selector": "table",
             "props": [
-                ("background-color", "#071225"),
+                ("background-color", "#071226"),
                 ("border-collapse", "collapse"),
-                ("border", "1px solid #1E293B"),
+                ("border", "1px solid rgba(120,160,255,0.12)"),
             ],
         },
     ]
@@ -3563,6 +3586,11 @@ def _apply_dark_table_style(styler):
         _dark_table_header_styles(),
         overwrite=False,
     )
+
+
+def _render_dark_dataframe(display_df, **kwargs):
+    styled = _apply_dark_table_style(display_df.reset_index(drop=True).style)
+    st.dataframe(styled, **kwargs)
 
 
 def _campaign_table(campaign_df):
@@ -4525,7 +4553,7 @@ def _creative_section(creative_df):
             }
         )
     )
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
+    _render_dark_dataframe(display_df, use_container_width=True, hide_index=True)
 
     lead_creative_df = creative_df[creative_df["primary_result_type"] == "Lead"]
     inbox_creative_df = creative_df[creative_df["primary_result_type"] == "Inbox"]
@@ -4630,7 +4658,7 @@ def _unmapped_campaigns_debug(ads_df):
                 }
             )
         )
-        st.dataframe(
+        _render_dark_dataframe(
             debug_df[["campaign_name", "adset_name", "spend", "leads", "inbox_messages"]],
             use_container_width=True,
             hide_index=True,
@@ -4715,10 +4743,36 @@ def main():
                 cache_ttl_slot,
             )
 
+    restored_file_cache = False
+    if not generate and STATE_ADS_DF not in st.session_state:
+        restored_file_cache = _restore_file_cache_to_session()
+
     pipeline_upload_present = pipeline_upload is not None
+    pipeline_upload_signature = _pipeline_upload_signature(pipeline_upload)
+    previous_pipeline_upload_signature = st.session_state.get(
+        STATE_PIPELINE_UPLOAD_SIGNATURE,
+        "",
+    )
     if pipeline_upload_present:
-        pipeline_df = _load_pipeline_upload(pipeline_upload)
-        st.session_state[STATE_PIPELINE_DF] = pipeline_df
+        if (
+            pipeline_upload_signature == previous_pipeline_upload_signature
+            and STATE_PIPELINE_DF in st.session_state
+        ):
+            pipeline_df = st.session_state[STATE_PIPELINE_DF]
+        else:
+            pipeline_df = _load_pipeline_upload(pipeline_upload)
+            if not pipeline_df.empty:
+                st.session_state[STATE_PIPELINE_DF] = pipeline_df
+                st.session_state[STATE_PIPELINE_UPLOAD_SIGNATURE] = pipeline_upload_signature
+                if STATE_ADS_DF in st.session_state:
+                    st.session_state[STATE_PIPELINE_UPLOAD_MESSAGE] = (
+                        "Pipeline data loaded and joined with current report."
+                    )
+                    st.rerun()
+                else:
+                    st.session_state[STATE_PIPELINE_UPLOAD_MESSAGE] = (
+                        "Pipeline loaded. Click Generate Report to join with Meta data."
+                    )
     else:
         pipeline_df = st.session_state.get(
             STATE_PIPELINE_DF,
@@ -4727,10 +4781,12 @@ def main():
     pipeline_filtered_df = _filter_pipeline_by_date_range(
         pipeline_df, date_from, date_to
     )
-
-    restored_file_cache = False
-    if not generate and STATE_ADS_DF not in st.session_state:
-        restored_file_cache = _restore_file_cache_to_session()
+    pipeline_upload_message = st.session_state.get(STATE_PIPELINE_UPLOAD_MESSAGE, "")
+    if pipeline_upload_message:
+        if pipeline_upload_message == "Pipeline data loaded and joined with current report.":
+            st.sidebar.success(pipeline_upload_message)
+        else:
+            st.sidebar.info(pipeline_upload_message)
 
     initial_label = (
         f"{date_from.strftime('%B')} {date_from.day}, {date_from.year} - "
@@ -4745,7 +4801,7 @@ def main():
         if STATE_ADS_DF not in st.session_state:
             _header(initial_label, status="Awaiting report", updated_at="-")
             if pipeline_upload_present or not pipeline_df.empty:
-                st.info("Upload complete. Click Generate Report to join contacts with Meta data.")
+                st.info("Pipeline loaded. Click Generate Report to join with Meta data.")
             else:
                 st.info("Choose a date range or preset, then click Generate Report.")
             return
